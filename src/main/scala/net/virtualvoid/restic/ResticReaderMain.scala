@@ -154,6 +154,9 @@ class ResticReader(
   def loadTree(pack: Hash.T, blob: PackBlob): Future[TreeBlob] =
     readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
 
+  def loadIndex(file: File): Future[IndexFile] =
+    readJson[IndexFile](file)
+
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length).map(data => new String(data, "utf8").parseJson.convertTo[T])(cpuBoundExecutor)
 
@@ -197,9 +200,23 @@ object ResticReaderMain extends App {
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  Source(reader.allFiles(reader.indexDir))
-    .mapAsync(1024)(reader.readJson[IndexFile](_))
-    .mapConcat(_.packs.flatMap(p => p.blobs.filter(_.isTree).map(_ -> p.id)))
+  def loadIndex(): Future[Map[String, (String, PackBlob)]] = {
+    Source(reader.allFiles(reader.indexDir))
+      .mapAsync(1024)(reader.loadIndex)
+      .mapConcat(_.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
+      .runWith(Sink.seq)
+      .map(_.toMap)
+  }
+  val index = loadIndex()
+  index.onComplete {
+    case Success(res) =>
+      System.gc()
+      System.gc()
+      println(s"Loaded ${res.size} index entries")
+      Thread.sleep(100000)
+  }
+
+  /*
     .async
     .mapAsync[Try[TreeBlob]](1024)(f => reader.loadTree(f._2, f._1).map(Success(_)).recover {
       case ex =>
@@ -215,6 +232,6 @@ object ResticReaderMain extends App {
         Thread.sleep(100000)
       case Failure(ex) =>
         ex.printStackTrace()
-    }
+    }*/
 }
 
