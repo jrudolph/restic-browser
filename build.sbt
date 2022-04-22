@@ -1,8 +1,9 @@
-val scalaV = "2.13.7"
+val scalaV = "2.13.8"
 val scalaTestV = "3.2.10"
 
 libraryDependencies ++= Seq(
-  "org.scalatest" %% "scalatest" % scalaTestV % "test"
+  "io.spray" %% "spray-json" % "1.3.6",
+  "org.scalatest" %% "scalatest" % scalaTestV % "test",
 )
 
 scalaVersion := scalaV
