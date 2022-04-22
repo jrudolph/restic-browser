@@ -82,29 +82,39 @@ class ResticReader(repoDir: File, cpuBoundExecutor: ExecutionContext, blockingEx
   }
   val keySpec = new SecretKeySpec(secret, "AES")
 
-  def decryptBlob(blob: Array[Byte]): Array[Byte] = {
-    val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-    val iv = blob.take(16)
-    val data = blob.drop(16).dropRight(16)
-    val ivSpec = new IvParameterSpec(iv)
-    cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-
-    cipher.doFinal(data)
+  private var mappedFiles: Map[File, MappedByteBuffer] = Map.empty
+  private def mappedFileFor(file: File): MappedByteBuffer = synchronized {
+    mappedFiles.get(file) match {
+      case Some(b) => b
+      case None =>
+        val ch = FileChannel.open(file.toPath)
+        val buffer = ch.map(MapMode.READ_ONLY, 0, file.length())
+        mappedFiles += (file -> buffer)
+        buffer
+    }
   }
   def readBlobFile(file: File, offset: Long = 0, length: Int = -1): Future[Array[Byte]] = Future {
-    val fis = new FileInputStream(file)
-    try {
-      fis.skip(offset)
-      val len =
-        if (length == -1) (file.length() - offset).toInt // FIXME
-        else length
-      //require(file.length() <= Int.MaxValue)
-      val buffer = new Array[Byte](len)
-      val read = fis.read(buffer)
-      require(read == buffer.length)
-      buffer
-    } finally fis.close()
+    val mapped = mappedFileFor(file).duplicate()
+    val len =
+      if (length == -1) (file.length() - offset).toInt
+      else length
+    mapped.position(offset.toInt).limit(offset.toInt + len).asInstanceOf[ByteBuffer]
   }(blockingExecutor).map(decryptBlob)(cpuBoundExecutor)
+
+  def decryptBlob(blob: ByteBuffer): Array[Byte] = {
+    val cipher = Cipher.getInstance("AES/CTR/NoPadding")
+    val ivBuffer = new Array[Byte](16)
+    blob.get(ivBuffer, 0, 16)
+      .limit(blob.limit - 16)
+
+    val ivSpec = new IvParameterSpec(ivBuffer)
+    cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+
+    val outputBuffer = ByteBuffer.allocate(blob.remaining())
+    cipher.doFinal(blob, outputBuffer)
+    outputBuffer.array()
+  }
+  }
 
   def packFile(id: Hash.T): File =
     new File(dataDir, s"${id.take(2)}/$id")
