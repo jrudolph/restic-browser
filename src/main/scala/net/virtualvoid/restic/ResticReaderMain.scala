@@ -23,7 +23,7 @@ object Hash {
   import spray.json.DefaultJsonProtocol._
   private val simpleHashFormat: JsonFormat[Hash.T] =
     // use truncated hashes for lesser memory usage
-    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x.take(12).asInstanceOf[T])
+    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x. /*take(12).*/ asInstanceOf[T])
   implicit val hashFormat: JsonFormat[Hash.T] = DeduplicationCache.cachedFormat(simpleHashFormat)
 }
 
