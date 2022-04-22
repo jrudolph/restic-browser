@@ -8,6 +8,10 @@ import javax.crypto.Cipher
 import javax.crypto.spec.{ IvParameterSpec, SecretKeySpec }
 import spray.json._
 
+import java.nio.{ ByteBuffer, MappedByteBuffer }
+import java.nio.channels.FileChannel
+import java.nio.channels.FileChannel.MapMode
+import java.nio.file.Files
 import scala.collection.immutable
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success, Try }
@@ -35,13 +39,22 @@ object BlobType {
   }
 }
 
+sealed trait CachedName
+object CachedName {
+  type T = String with CachedName
+
+  import spray.json.DefaultJsonProtocol._
+  private val simpleCachedNameFormat: JsonFormat[CachedName.T] = JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x.asInstanceOf[T])
+  implicit val hashFormat: JsonFormat[CachedName.T] = DeduplicationCache.cachedFormat(simpleCachedNameFormat)
+}
+
 case class TreeNode(
-    name:    String,
-    content: Option[Seq[Hash.T]],
+    name:    CachedName.T,
+    content: Option[Vector[Hash.T]],
     subtree: Option[Hash.T]
 )
 case class TreeBlob(
-    nodes: Seq[TreeNode]
+    nodes: Vector[TreeNode]
 )
 object TreeBlob {
   import spray.json.DefaultJsonProtocol._
@@ -60,7 +73,7 @@ case class PackBlob(
 }
 case class PackIndex(
     id:    Hash.T,
-    blobs: Seq[PackBlob]
+    blobs: Vector[PackBlob]
 )
 case class IndexFile(
     packs: Seq[PackIndex]
@@ -72,7 +85,12 @@ object IndexFile {
   implicit val indexFileFormat = jsonFormat1(IndexFile.apply _)
 }
 
-class ResticReader(repoDir: File, cpuBoundExecutor: ExecutionContext, blockingExecutor: ExecutionContext) {
+class ResticReader(
+    repoDir:          File,
+    backingDir:       File,
+    cacheDir:         File,
+    cpuBoundExecutor: ExecutionContext,
+    blockingExecutor: ExecutionContext) {
   val secret = {
     val fis = new FileInputStream("secret")
     val res = new Array[Byte](32)
@@ -114,10 +132,25 @@ class ResticReader(repoDir: File, cpuBoundExecutor: ExecutionContext, blockingEx
     cipher.doFinal(blob, outputBuffer)
     outputBuffer.array()
   }
+
+  def packFile(id: Hash.T): File = {
+    val path = s"${id.take(2)}/$id"
+    val res = new File(dataDir, path)
+    if (res.exists()) res
+    else {
+      val cached = new File(cacheDir, "data/" + path)
+      if (cached.exists()) cached
+      else {
+        val backing = new File(backingDir, "data/" + path)
+        if (backingDir.exists()) {
+          cached.getParentFile.mkdirs()
+          Files.copy(backing.toPath, cached.toPath)
+          cached
+        } else throw new RuntimeException(s"File missing in backing dir: $backing")
+      }
+    }
   }
 
-  def packFile(id: Hash.T): File =
-    new File(dataDir, s"${id.take(2)}/$id")
   def loadTree(pack: Hash.T, blob: PackBlob): Future[TreeBlob] =
     readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
 
@@ -148,20 +181,32 @@ object ResticReaderMain extends App {
   import system.dispatcher
 
   //val indexFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/index/00/006091dfe0cd65b2240f7e05eb6d7df5122f077940619f3a1092da60134a3db0"
-  //val dataFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/data/5c/5c141f74d422dd3607f0009def9ffd369fc68bf3a7a6214eb8b4d5638085e929"
+  val dataFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/data/5c/5c141f74d422dd3607f0009def9ffd369fc68bf3a7a6214eb8b4d5638085e929"
   //val res = readBlobFile(new File(dataFile), 820)
   //val res = readJson[IndexFile](new File(indexFile))
   val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
-  val reader = new ResticReader(repoDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
+  val backingDir = new File("/tmp/restic-repo")
+  val cacheDir = {
+    val res = new File("restic-cache")
+    res.mkdirs()
+    res
+  }
+  val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
 
   //val indexFiles = reader.allFiles(indexDir)
   //println(indexFiles.size)
+  //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
   Source(reader.allFiles(reader.indexDir))
     .mapAsync(1024)(reader.readJson[IndexFile](_))
     .mapConcat(_.packs.flatMap(p => p.blobs.filter(_.isTree).map(_ -> p.id)))
     .async
-    .mapAsync[Try[TreeBlob]](1024)(f => reader.loadTree(f._2, f._1).map(Success(_)).recover { case ex => println(s"pack ${f._2} not found while trying to load tree ${f._1.id}"); Failure(ex) })
+    .mapAsync[Try[TreeBlob]](1024)(f => reader.loadTree(f._2, f._1).map(Success(_)).recover {
+      case ex =>
+        println(s"pack ${f._2} not found while trying to load tree ${f._1.id}");
+        Failure(ex)
+    }
+    )
     .runWith(Sink.seq)
     .onComplete {
       case Success(res) =>
