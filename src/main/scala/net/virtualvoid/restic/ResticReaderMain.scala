@@ -21,7 +21,9 @@ object Hash {
   type T = String with Hash
 
   import spray.json.DefaultJsonProtocol._
-  private val simpleHashFormat: JsonFormat[Hash.T] = JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x.asInstanceOf[T])
+  private val simpleHashFormat: JsonFormat[Hash.T] =
+    // use truncated hashes for lesser memory usage
+    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x.take(12).asInstanceOf[T])
   implicit val hashFormat: JsonFormat[Hash.T] = DeduplicationCache.cachedFormat(simpleHashFormat)
 }
 
@@ -85,6 +87,21 @@ object IndexFile {
   implicit val indexFileFormat = jsonFormat1(IndexFile.apply _)
 }
 
+object FileExtension {
+  implicit class FileImplicits(val f: File) extends AnyVal {
+    def resolved: File =
+      if (f.exists()) f
+      else {
+        val cands = f.getParentFile.listFiles().filter(_.getName startsWith f.getName)
+        cands.size match {
+          case 1 => cands.head
+          case 0 => f // no resolution possible return original
+          case _ => throw new RuntimeException(s"Ambiguous ref: $f can be resolved to all of [${cands.mkString(", ")}]")
+        }
+      }
+  }
+}
+
 class ResticReader(
     repoDir:          File,
     backingDir:       File,
@@ -134,14 +151,16 @@ class ResticReader(
   }
 
   def packFile(id: Hash.T): File = {
+    import FileExtension._
+
     val path = s"${id.take(2)}/$id"
-    val res = new File(dataDir, path)
+    val res = new File(dataDir, path).resolved
     if (res.exists()) res
     else {
-      val cached = new File(cacheDir, "data/" + path)
+      val cached = new File(cacheDir, "data/" + path).resolved
       if (cached.exists()) cached
       else {
-        val backing = new File(backingDir, "data/" + path)
+        val backing = new File(backingDir, "data/" + path).resolved
         if (backingDir.exists()) {
           cached.getParentFile.mkdirs()
           Files.copy(backing.toPath, cached.toPath)
@@ -200,7 +219,7 @@ object ResticReaderMain extends App {
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  def loadIndex(): Future[Map[String, (String, PackBlob)]] = {
+  def loadIndex(): Future[Map[String, (Hash.T, PackBlob)]] = {
     Source(reader.allFiles(reader.indexDir))
       .mapAsync(1024)(reader.loadIndex)
       .mapConcat(_.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
@@ -210,17 +229,28 @@ object ResticReaderMain extends App {
   val index = loadIndex()
   index.onComplete {
     case Success(res) =>
-      System.gc()
-      System.gc()
+      //System.gc()
+      //System.gc()
       println(s"Loaded ${res.size} index entries")
-      Thread.sleep(100000)
+    //Thread.sleep(100000)
   }
 
-  /*
-    .async
-    .mapAsync[Try[TreeBlob]](1024)(f => reader.loadTree(f._2, f._1).map(Success(_)).recover {
+  def loadTree(id: String): Future[TreeBlob] =
+    for {
+      i <- index
+      (p, b) = i(id)
+      tree <- reader.loadTree(p, b)
+    } yield tree
+
+  val allTrees: Future[Seq[Hash.T]] =
+    index.map { i =>
+      i.values.filter(_._2.isTree).map(_._2.id).toVector
+    }
+
+  Source.futureSource(allTrees.map(Source(_)))
+    .mapAsync[Try[TreeBlob]](1024)(treeId => loadTree(treeId).map(Success(_)).recover {
       case ex =>
-        println(s"pack ${f._2} not found while trying to load tree ${f._1.id}");
+        println(s"Failure while trying to load tree ${treeId}: ${ex.getMessage}");
         Failure(ex)
     }
     )
@@ -232,6 +262,6 @@ object ResticReaderMain extends App {
         Thread.sleep(100000)
       case Failure(ex) =>
         ex.printStackTrace()
-    }*/
+    }
 }
 
