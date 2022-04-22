@@ -2,6 +2,7 @@ val scalaV = "2.13.8"
 val scalaTestV = "3.2.10"
 
 libraryDependencies ++= Seq(
+  "com.typesafe.akka" %% "akka-stream" % "2.6.19",
   "io.spray" %% "spray-json" % "1.3.6",
   "org.scalatest" %% "scalatest" % scalaTestV % "test",
 )
