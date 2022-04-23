@@ -1,5 +1,6 @@
 package net.virtualvoid.restic
 
+import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
 
@@ -50,17 +51,45 @@ object CachedName {
   implicit val hashFormat: JsonFormat[CachedName.T] = DeduplicationCache.cachedFormat(simpleCachedNameFormat)
 }
 
-case class TreeNode(
+sealed trait TreeNode extends Product {
+  def name: String
+  def isBranch: Boolean
+}
+case class TreeLeaf(
     name:    CachedName.T,
-    content: Option[Vector[Hash.T]],
-    subtree: Option[Hash.T]
-)
+    content: Vector[Hash.T]
+) extends TreeNode {
+  override def isBranch: Boolean = false
+}
+case class TreeBranch(
+    name:    CachedName.T,
+    subtree: Hash.T
+) extends TreeNode {
+  override def isBranch: Boolean = true
+}
+case class TreeLink(
+    name:       CachedName.T,
+    linktarget: String
+) extends TreeNode {
+  override def isBranch: Boolean = false
+}
 case class TreeBlob(
     nodes: Vector[TreeNode]
 )
 object TreeBlob {
   import spray.json.DefaultJsonProtocol._
-  implicit val nodeFormat = jsonFormat3(TreeNode.apply _)
+  implicit val leafFormat = jsonFormat2(TreeLeaf.apply _)
+  implicit val branchFormat = jsonFormat2(TreeBranch.apply _)
+  implicit val linkFormat = jsonFormat2(TreeLink.apply _)
+  implicit val nodeFormat = new JsonFormat[TreeNode] {
+    override def read(json: JsValue): TreeNode = json.asJsObject.fields("type") match {
+      case JsString("dir")     => json.convertTo[TreeBranch]
+      case JsString("file")    => json.convertTo[TreeLeaf]
+      case JsString("symlink") => json.convertTo[TreeLink]
+    }
+
+    override def write(obj: TreeNode): JsValue = ???
+  }
   implicit val treeBlobFormat = jsonFormat1(TreeBlob.apply _)
 }
 
@@ -177,7 +206,8 @@ class ResticReader(
     readJson[IndexFile](file)
 
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
-    readBlobFile(file, offset, length).map(data => new String(data, "utf8").parseJson.convertTo[T])(cpuBoundExecutor)
+    readBlobFile(file, offset, length)
+      .map(data => new String(data, "utf8").parseJson.convertTo[T])(cpuBoundExecutor)
 
   val indexDir = new File(repoDir, "index")
   val snapshotDir = new File(repoDir, "snapshots")
@@ -247,7 +277,47 @@ object ResticReaderMain extends App {
       i.values.filter(_._2.isTree).map(_._2.id).toVector
     }
 
-  Source.futureSource(allTrees.map(Source(_)))
+  def walkTreeNodes(blob: TreeBlob): Source[TreeNode, NotUsed] = {
+    val subtrees = blob.nodes.collect { case b: TreeBranch => b }
+    Source(blob.nodes) ++
+      Source(subtrees)
+      .mapAsync(1024)(x => loadTree(x.subtree))
+      .flatMapConcat(walkTreeNodes)
+  }
+
+  //  {
+  //    //println(s"walking ${node.name}")
+  //    node match {
+  //      case b @ TreeBranch(_, subtree) =>
+  //        Source.futureSource(
+  //          loadTree(subtree).map { t =>
+  //            val (subtrees, others) = t.nodes.partition(_.isBranch)
+  //
+  //
+  //          }
+  //
+  //        )
+  //      case x => Source.empty
+  //    }
+  //  }
+
+  /*loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
+    .map { t =>
+      walkTreeNodes(t)
+        .runFold(Map.empty[String, Int].withDefaultValue(0))((s, n) => s.updatedWith(n.productPrefix)(x => Some(x.getOrElse(0) + 1)))
+        .onComplete(println)
+    }*/
+
+  loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
+    .map { t =>
+      walkTreeNodes(t)
+        .mapConcat { case l: TreeLeaf => l.content; case _ => Vector.empty }
+        .runWith(Sink.seq)
+        .map(_.toSet.size)
+        .onComplete(println)
+    }
+
+  /*Source.futureSource(allTrees.map(Source(_)))
     .mapAsync[Try[TreeBlob]](1024)(treeId => loadTree(treeId).map(Success(_)).recover {
       case ex =>
         println(s"Failure while trying to load tree ${treeId}: ${ex.getMessage}");
@@ -262,6 +332,6 @@ object ResticReaderMain extends App {
         Thread.sleep(100000)
       case Failure(ex) =>
         ex.printStackTrace()
-    }
+    }*/
 }
 
