@@ -285,6 +285,35 @@ object ResticReaderMain extends App {
       .flatMapConcat(walkTreeNodes)
   }
 
+  sealed trait Reference
+  case class SnapshotReference(id: Hash.T) extends Reference
+  case class TreeReference(treeBlobId: Hash.T, node: TreeNode) extends Reference
+  case class BlobReference(id: Hash.T, referenceChain: Seq[Reference]) {
+    def chainString: String = {
+      def refString(ref: Reference): String = ref match {
+        case SnapshotReference(id)  => s"snap:${id.take(10)}"
+        case TreeReference(_, node) => node.name
+      }
+
+      referenceChain.reverse.map(refString).mkString("/")
+    }
+  }
+  def reverseReferences(treeId: Hash.T, chain: List[Reference]): Future[Vector[BlobReference]] =
+    loadTree(treeId).flatMap { blob =>
+      val subdirs = blob.nodes.collect { case b: TreeBranch => b }
+      val files = blob.nodes.collect { case TreeLeaf(_, content) => content }.flatten
+
+      val leaves =
+        blob.nodes
+          .flatMap {
+            case node @ TreeLeaf(_, content) =>
+              content.map(c => BlobReference(c, TreeReference(treeId, node) :: chain))
+            case _ => Vector.empty
+          }
+
+      Future.traverse(subdirs)(b => reverseReferences(b.subtree, TreeReference(treeId, b) :: chain)).map(_.flatten ++ leaves)
+    }
+
   //  {
   //    //println(s"walking ${node.name}")
   //    node match {
@@ -308,14 +337,30 @@ object ResticReaderMain extends App {
         .onComplete(println)
     }*/
 
-  loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
+  reverseReferences("a5b1b14e1b87f8e4804604065179d8edfd0815752b386b18de8660d099856d70".asInstanceOf[Hash.T], Nil)
+    .onComplete {
+      case Success(v) =>
+        println(s"Got ${v.size} entries")
+        val grouped = v.groupBy(_.id).toVector.sortBy(-_._2.size)
+
+        grouped.take(500).foreach {
+          case (id, refs) =>
+            val size = index.value.get.get(id)._2.length
+
+            println()
+            println(f"${refs.size}%3d $id%64s size: $size%6d")
+            refs.take(2).foreach(r => println(r.chainString))
+        }
+    }
+
+  /*loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
     .map { t =>
       walkTreeNodes(t)
         .mapConcat { case l: TreeLeaf => l.content; case _ => Vector.empty }
         .runWith(Sink.seq)
         .map(_.toSet.size)
         .onComplete(println)
-    }
+    }*/
 
   /*Source.futureSource(allTrees.map(Source(_)))
     .mapAsync[Try[TreeBlob]](1024)(treeId => loadTree(treeId).map(Success(_)).recover {
