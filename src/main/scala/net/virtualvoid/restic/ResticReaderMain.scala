@@ -119,7 +119,8 @@ object IndexFile {
 object FileExtension {
   implicit class FileImplicits(val f: File) extends AnyVal {
     def resolved: File =
-      if (f.exists()) f
+      if (f.getName.length == 64) f // shortcut when full hashes are used
+      else if (f.exists()) f
       else {
         val cands = f.getParentFile.listFiles().filter(_.getName startsWith f.getName)
         cands.size match {
