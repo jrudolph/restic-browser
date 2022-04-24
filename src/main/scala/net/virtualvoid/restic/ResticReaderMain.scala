@@ -3,16 +3,18 @@ package net.virtualvoid.restic
 import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
+import net.virtualvoid.restic.Hash.T
 
-import java.io.{ File, FileInputStream }
+import java.io.{ BufferedOutputStream, File, FileInputStream, FileOutputStream }
 import javax.crypto.Cipher
 import javax.crypto.spec.{ IvParameterSpec, SecretKeySpec }
 import spray.json._
 
-import java.nio.{ ByteBuffer, MappedByteBuffer }
+import java.nio.{ ByteBuffer, ByteOrder, MappedByteBuffer }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
+import scala.annotation.tailrec
 import scala.collection.immutable
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success, Try }
@@ -24,7 +26,7 @@ object Hash {
   import spray.json.DefaultJsonProtocol._
   private val simpleHashFormat: JsonFormat[Hash.T] =
     // use truncated hashes for lesser memory usage
-    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x. /*take(12).*/ asInstanceOf[T])
+    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x /*.take(12)*/ .asInstanceOf[T])
   implicit val hashFormat: JsonFormat[Hash.T] = DeduplicationCache.cachedFormat(simpleHashFormat)
 }
 
@@ -170,7 +172,7 @@ class ResticReader(
     val cipher = Cipher.getInstance("AES/CTR/NoPadding")
     val ivBuffer = new Array[Byte](16)
     blob.get(ivBuffer, 0, 16)
-      .limit(blob.limit - 16)
+      .limit(blob.limit() - 16)
 
     val ivSpec = new IvParameterSpec(ivBuffer)
     cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
@@ -245,6 +247,7 @@ object ResticReaderMain extends App {
     res
   }
   val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
+  val indexFile = new File("index.out")
 
   //val indexFiles = reader.allFiles(indexDir)
   //println(indexFiles.size)
@@ -257,25 +260,126 @@ object ResticReaderMain extends App {
       .runWith(Sink.seq)
       .map(_.toMap)
   }
-  val index = loadIndex()
-  index.onComplete {
+  lazy val index = bench("loadIndex")(loadIndex())
+  /*index.onComplete {
     case Success(res) =>
       //System.gc()
       //System.gc()
       println(s"Loaded ${res.size} index entries")
+
+      if (!indexFile.exists())
+        benchSync("writeIndex")(writeIndexFile(res))
     //Thread.sleep(100000)
+  }*/
+
+  trait Index {
+    def lookup(blobId: Hash.T): (Hash.T, PackBlob)
   }
+
+  def writeIndexFile(index: Map[String, (Hash.T, PackBlob)]): Unit = {
+    val keys = index.keys.toVector.sorted
+    val fos = new BufferedOutputStream(new FileOutputStream(indexFile), 1000000)
+
+    def uint32le(value: Int): Unit = {
+      fos.write(value)
+      fos.write(value >> 8)
+      fos.write(value >> 16)
+      fos.write(value >> 24)
+    }
+    def hash(hash: String): Unit = {
+      require(hash.length == 64)
+      var i = 0
+      while (i < 32) {
+        fos.write(Integer.parseInt(hash, i * 2, i * 2 + 2, 16))
+        i += 1
+      }
+      //hash.grouped(2).foreach(s => fos.write(Integer.parseInt(s, 16)))
+    }
+
+    keys.foreach { blobId =>
+      val (packId, packBlob) = index(blobId)
+      hash(blobId)
+      val isTree = if (packBlob.isTree) 1 else 0
+      require(packBlob.offset <= Int.MaxValue)
+      hash(packId)
+      uint32le(packBlob.offset.toInt | (isTree << 31))
+      uint32le(packBlob.length)
+    }
+    fos.close()
+  }
+
+  lazy val index2: Future[Index] = Future {
+    val HeaderSize = 0
+    val EntrySize = 72 /* 2 * 32 + 4 + 4 */
+
+    val file = FileChannel.open(indexFile.toPath)
+    val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
+    val intBuffer = indexBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+    val numEntries = ((indexFile.length() - HeaderSize) / EntrySize).toInt
+    println(s"Found $numEntries")
+
+    val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
+    def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
+
+    new Index {
+      override def lookup(blobId: Hash.T): (Hash.T, PackBlob) = {
+        val targetKey = java.lang.Long.parseLong(blobId.take(15), 16)
+        //println(f"[${blobId.take(15)}] longPrefix: $targetKey%015x")
+
+        @tailrec def find(leftIndex: Int, rightIndex: Int, step: Int): (Hash.T, PackBlob) = {
+          val leftKey = keyAt(leftIndex)
+          val rightKey = keyAt(rightIndex)
+          val interpolatedIndex = leftIndex + ((targetKey - leftKey).toFloat * (rightIndex - leftIndex) / (rightKey - leftKey)).toInt
+          val interpolatedKey = keyAt(interpolatedIndex)
+          //println(f"[${blobId.take(15)}] step: $step left: $leftIndex%d ($leftKey%015x) right: $rightIndex%d ($rightKey%015x) interpolated: $interpolatedIndex%d ($interpolatedKey%015x)")
+          if (interpolatedKey == targetKey) {
+            val targetBaseOffset = interpolatedIndex * EntrySize
+            val targetPackHashBytes = {
+              val dst = new Array[Byte](32)
+              indexBuffer.asReadOnlyBuffer.position(targetBaseOffset + 32).get(dst)
+              dst
+            }
+            val targetPackHash = targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
+            val offsetAndType = intBuffer.get((targetBaseOffset + 64) >> 2)
+            val length = intBuffer.get((targetBaseOffset + 68) >> 2)
+            val offset = offsetAndType & 0x7fffffff
+            val tpe = if ((offsetAndType & 0x80000000) != 0) BlobType.Tree else BlobType.Data
+
+            val res = (targetPackHash, PackBlob(blobId, tpe, offset, length))
+            //println(s"found: $res")
+            res
+          } else if (leftIndex == rightIndex) throw new IllegalStateException(s"$leftIndex == $rightIndex")
+          else if (step > 10) throw new IllegalStateException("not converging")
+          else if (targetKey < interpolatedKey)
+            find(leftIndex, interpolatedIndex - 1, step + 1)
+          else
+            find(interpolatedIndex + 1, rightIndex, step + 1)
+        }
+
+        find(0, numEntries - 1, 0)
+      }
+    }
+  }
+  /*index.foreach { _ =>
+    index2.foreach { i2 =>
+      val target = "5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a"
+      println(s"Looking up $target")
+      i2.lookup(target.asInstanceOf[Hash.T])
+    }
+  }*/
 
   def loadTree(id: String): Future[TreeBlob] =
     for {
-      i <- index
-      (p, b) = i(id)
+      i <- index2
+      (p, b) = i.lookup(id.asInstanceOf[Hash.T])
       tree <- reader.loadTree(p, b)
     } yield tree
 
-  val allTrees: Future[Seq[Hash.T]] =
+  lazy val allTrees: Future[Seq[Hash.T]] =
     index.map { i =>
-      i.values.filter(_._2.isTree).map(_._2.id).toVector
+      benchSync("allTrees") {
+        i.values.filter(_._2.isTree).map(_._2.id).toVector
+      }
     }
 
   def walkTreeNodes(blob: TreeBlob): Source[TreeNode, NotUsed] = {
@@ -302,7 +406,6 @@ object ResticReaderMain extends App {
   def reverseReferences(treeId: Hash.T, chain: List[Reference]): Future[Vector[BlobReference]] =
     loadTree(treeId).flatMap { blob =>
       val subdirs = blob.nodes.collect { case b: TreeBranch => b }
-      val files = blob.nodes.collect { case TreeLeaf(_, content) => content }.flatten
 
       val leaves =
         blob.nodes
@@ -314,6 +417,18 @@ object ResticReaderMain extends App {
 
       Future.traverse(subdirs)(b => reverseReferences(b.subtree, TreeReference(treeId, b) :: chain)).map(_.flatten ++ leaves)
     }
+
+  def bench[T](desc: String)(f: => Future[T]): Future[T] = {
+    val start = System.nanoTime()
+    val res = f
+    res.onComplete { res =>
+      val end = System.nanoTime()
+      val lastedMillis = (end - start) / 1000000
+      println(f"[$desc] $lastedMillis%4d ms")
+    }
+    res
+  }
+  def benchSync[T](desc: String)(f: => T): T = bench[T](desc)(Future.successful(f)).value.get.get
 
   //  {
   //    //println(s"walking ${node.name}")
@@ -346,7 +461,7 @@ object ResticReaderMain extends App {
 
         grouped.take(500).foreach {
           case (id, refs) =>
-            val size = index.value.get.get(id)._2.length
+            val size = index2.value.get.get.lookup(id)._2.length
 
             println()
             println(f"${refs.size}%3d $id%64s size: $size%6d")
