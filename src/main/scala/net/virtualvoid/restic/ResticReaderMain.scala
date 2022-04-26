@@ -298,7 +298,6 @@ object ResticReaderMain extends App {
         fos.write(Integer.parseInt(hash, i * 2, i * 2 + 2, 16))
         i += 1
       }
-      //hash.grouped(2).foreach(s => fos.write(Integer.parseInt(s, 16)))
     }
 
     keys.foreach { blobId =>
@@ -373,32 +372,16 @@ object ResticReaderMain extends App {
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
         @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int): (Int, Int) = {
-          val bias = 10
           val guessKey = keyAt(guess)
           //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
           if (guessKey == targetKey) (guess, step)
           else if (leftIndex == rightIndex) throw new IllegalStateException
-          /*else if (step > 3)
-            if (targetKey < guessKey)
-              rec(leftIndex, guess - 1, math.max((leftIndex + guess - 1) / 2, guess - bias), step + 1)
-            else
-              rec(guess + 1, rightIndex, math.min((guess + 1 + rightIndex) / 2, guess + bias), step + 1)
-          */ else { // interpolation step
+          else { // interpolation step
             val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
             val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
 
             rec(newLeft, newRight, interpolate(newLeft, newRight), step + 1)
-          } /*else { // binary step
-            if (targetKey < guessKey)
-              rec(leftIndex, guess - 1, (leftIndex + guess - 1) / 2, step + 1)
-            else
-              rec(guess + 1, rightIndex, (guess + 1 + rightIndex) / 2, step + 1)
-          }*/ /*else { // side step
-            if (targetKey < guessKey)
-              rec(leftIndex, guess - 1, math.max((leftIndex + guess - 1) / 2, guess - bias), step + 1)
-            else
-              rec(guess + 1, rightIndex, math.min((guess + 1 + rightIndex) / 2, guess + bias), step + 1)
-          }*/
+          }
         }
 
         //val firstGuess = numEntries / 2
@@ -408,13 +391,6 @@ object ResticReaderMain extends App {
     }
   }
 
-  /*val hashes = Seq(
-    "ac08ce34ba4f8123618661bef2425f7028ffb9ac740578a3ee88684d2523fee8",
-    "ecade2be5f49d82ccb87c89e10c9c0d650a24262e7576c1cf69a84ed651385ff",
-    "5775bb2fd2938c74f20943cda340871caa1557031787a5bca9455513917a3e87",
-    "1a4ac24a6ae18a39b92e9b2da9f79f5ff4375cf97575aa9a3c1cb479cea68e2e",
-    "c414fed6f8ae03620111215ab160f3182a7a6a707bec59a835a85791a0812759"
-  )*/
   //index.foreach { _ =>
   /*index2.foreach { i2 =>
     /*import scala.collection.JavaConverters._
