@@ -14,6 +14,8 @@ import java.nio.{ ByteBuffer, ByteOrder, MappedByteBuffer }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
+import java.util
+import java.util.{ Collections, Random }
 import scala.annotation.tailrec
 import scala.collection.immutable
 import scala.concurrent.{ ExecutionContext, Future }
@@ -274,6 +276,9 @@ object ResticReaderMain extends App {
 
   trait Index {
     def lookup(blobId: Hash.T): (Hash.T, PackBlob)
+
+    def find(blobId: Hash.T): (Int, Int)
+    def allKeys: IndexedSeq[Hash.T]
   }
 
   def writeIndexFile(index: Map[String, (Hash.T, PackBlob)]): Unit = {
@@ -322,51 +327,111 @@ object ResticReaderMain extends App {
     def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
 
     new Index {
+      override def allKeys: IndexedSeq[Hash.T] = new IndexedSeq[Hash.T] {
+        override def length: Int = numEntries
+        override def apply(i: Int): T = {
+          val targetPackHashBytes = {
+            val dst = new Array[Byte](32)
+            indexBuffer.asReadOnlyBuffer.position(i * EntrySize).get(dst)
+            dst
+          }
+          targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
+        }
+      }
+
       override def lookup(blobId: Hash.T): (Hash.T, PackBlob) = {
-        val targetKey = java.lang.Long.parseLong(blobId.take(15), 16)
-        //println(f"[${blobId.take(15)}] longPrefix: $targetKey%015x")
+        def entryAt(idx: Int, step: Int): (Hash.T, PackBlob) = {
+          val targetBaseOffset = idx * EntrySize
+          val targetPackHashBytes = {
+            val dst = new Array[Byte](32)
+            indexBuffer.asReadOnlyBuffer.position(targetBaseOffset + 32).get(dst)
+            dst
+          }
+          val targetPackHash = targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
+          val offsetAndType = intBuffer.get((targetBaseOffset + 64) >> 2)
+          val length = intBuffer.get((targetBaseOffset + 68) >> 2)
+          val offset = offsetAndType & 0x7fffffff
+          val tpe = if ((offsetAndType & 0x80000000) != 0) BlobType.Tree else BlobType.Data
 
-        @tailrec def find(leftIndex: Int, rightIndex: Int, step: Int): (Hash.T, PackBlob) = {
-          val leftKey = keyAt(leftIndex)
-          val rightKey = keyAt(rightIndex)
-          val interpolatedIndex = leftIndex + ((targetKey - leftKey).toFloat * (rightIndex - leftIndex) / (rightKey - leftKey)).toInt
-          val interpolatedKey = keyAt(interpolatedIndex)
-          //println(f"[${blobId.take(15)}] step: $step left: $leftIndex%d ($leftKey%015x) right: $rightIndex%d ($rightKey%015x) interpolated: $interpolatedIndex%d ($interpolatedKey%015x)")
-          if (interpolatedKey == targetKey) {
-            val targetBaseOffset = interpolatedIndex * EntrySize
-            val targetPackHashBytes = {
-              val dst = new Array[Byte](32)
-              indexBuffer.asReadOnlyBuffer.position(targetBaseOffset + 32).get(dst)
-              dst
-            }
-            val targetPackHash = targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
-            val offsetAndType = intBuffer.get((targetBaseOffset + 64) >> 2)
-            val length = intBuffer.get((targetBaseOffset + 68) >> 2)
-            val offset = offsetAndType & 0x7fffffff
-            val tpe = if ((offsetAndType & 0x80000000) != 0) BlobType.Tree else BlobType.Data
-
-            val res = (targetPackHash, PackBlob(blobId, tpe, offset, length))
-            //println(s"found: $res")
-            res
-          } else if (leftIndex == rightIndex) throw new IllegalStateException(s"$leftIndex == $rightIndex")
-          else if (step > 10) throw new IllegalStateException("not converging")
-          else if (targetKey < interpolatedKey)
-            find(leftIndex, interpolatedIndex - 1, step + 1)
-          else
-            find(interpolatedIndex + 1, rightIndex, step + 1)
+          val res = (targetPackHash, PackBlob(blobId, tpe, offset, length))
+          //println(f"[${blobId.take(15)}] step: $step%2d   at: $idx%8d found: $res")
+          res
         }
 
-        find(0, numEntries - 1, 0)
+        val (idx, step) = find(blobId)
+        entryAt(idx, step)
+      }
+
+      def find(blobId: Hash.T): (Int, Int) = {
+        val targetKey = java.lang.Long.parseLong(blobId.take(15), 16)
+
+        def interpolate(left: Int, right: Int): Int = {
+          val leftKey = keyAt(left)
+          val rightKey = keyAt(right)
+          left + ((targetKey - leftKey).toFloat * (right - left) / (rightKey - leftKey)).toInt
+        }
+        // https://www.sciencedirect.com/science/article/pii/S221509862100046X
+        // hashes should be uniformly distributed, so interpolation search is fastest
+        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int): (Int, Int) = {
+          val bias = 10
+          val guessKey = keyAt(guess)
+          //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+          if (guessKey == targetKey) (guess, step)
+          else if (leftIndex == rightIndex) throw new IllegalStateException
+          /*else if (step > 3)
+            if (targetKey < guessKey)
+              rec(leftIndex, guess - 1, math.max((leftIndex + guess - 1) / 2, guess - bias), step + 1)
+            else
+              rec(guess + 1, rightIndex, math.min((guess + 1 + rightIndex) / 2, guess + bias), step + 1)
+          */ else { // interpolation step
+            val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
+            val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
+
+            rec(newLeft, newRight, interpolate(newLeft, newRight), step + 1)
+          } /*else { // binary step
+            if (targetKey < guessKey)
+              rec(leftIndex, guess - 1, (leftIndex + guess - 1) / 2, step + 1)
+            else
+              rec(guess + 1, rightIndex, (guess + 1 + rightIndex) / 2, step + 1)
+          }*/ /*else { // side step
+            if (targetKey < guessKey)
+              rec(leftIndex, guess - 1, math.max((leftIndex + guess - 1) / 2, guess - bias), step + 1)
+            else
+              rec(guess + 1, rightIndex, math.min((guess + 1 + rightIndex) / 2, guess + bias), step + 1)
+          }*/
+        }
+
+        //val firstGuess = numEntries / 2
+        val firstGuess = interpolate(0, numEntries - 1)
+        rec(0, numEntries - 1, firstGuess, 1)
       }
     }
   }
-  /*index.foreach { _ =>
-    index2.foreach { i2 =>
-      val target = "5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a"
-      println(s"Looking up $target")
-      i2.lookup(target.asInstanceOf[Hash.T])
+
+  /*val hashes = Seq(
+    "ac08ce34ba4f8123618661bef2425f7028ffb9ac740578a3ee88684d2523fee8",
+    "ecade2be5f49d82ccb87c89e10c9c0d650a24262e7576c1cf69a84ed651385ff",
+    "5775bb2fd2938c74f20943cda340871caa1557031787a5bca9455513917a3e87",
+    "1a4ac24a6ae18a39b92e9b2da9f79f5ff4375cf97575aa9a3c1cb479cea68e2e",
+    "c414fed6f8ae03620111215ab160f3182a7a6a707bec59a835a85791a0812759"
+  )*/
+  //index.foreach { _ =>
+  /*index2.foreach { i2 =>
+    /*import scala.collection.JavaConverters._
+    val ordered = new util.ArrayList[Hash.T]
+    ordered.addAll(i2.allKeys.asJava)
+    Collections.shuffle(ordered)
+    val hashes = ordered.asScala.take(1000)*/
+
+    val steps = i2.allKeys.map { h =>
+      i2.find(h.asInstanceOf[Hash.T])._2
     }
+    val num = steps.size
+    val maxSteps = steps.max
+    val totalSteps = steps.sum
+    println(f"Total steps: $totalSteps%7d avg: ${totalSteps.toFloat / num}%5.2f maxSteps: $maxSteps%2d")
   }*/
+  //}
 
   def loadTree(id: String): Future[TreeBlob] =
     for {
@@ -459,14 +524,16 @@ object ResticReaderMain extends App {
         println(s"Got ${v.size} entries")
         val grouped = v.groupBy(_.id).toVector.sortBy(-_._2.size)
 
-        grouped.take(500).foreach {
+        grouped.take(10).foreach {
           case (id, refs) =>
             val size = index2.value.get.get.lookup(id)._2.length
 
             println()
             println(f"${refs.size}%3d $id%64s size: $size%6d")
-            refs.take(2).foreach(r => println(r.chainString))
+            refs.take(20).foreach(r => println(r.chainString))
         }
+
+        system.terminate()
     }
 
   /*loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
