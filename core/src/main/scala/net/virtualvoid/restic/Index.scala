@@ -1,7 +1,5 @@
 package net.virtualvoid.restic
 
-import net.virtualvoid.restic.Hash
-
 import java.io.{ BufferedOutputStream, File, FileOutputStream }
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
