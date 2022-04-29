@@ -53,7 +53,18 @@ object Hash {
   }
 
   implicit val hashOrder: Ordering[Hash] = new Ordering[Hash] {
-    override def compare(x: Hash, y: Hash): Int = util.Arrays.compare(x.bytes, y.bytes)
+    override def compare(x: Hash, y: Hash): Int = {
+      val xb = x.bytes
+      val yb = y.bytes
+      require(xb.length == yb.length)
+      @tailrec def rec(ix: Int): Int =
+        if (ix < xb.size) {
+          val r = Integer.compare(xb(ix) & 0xff, yb(ix) & 0xff)
+          if (r == 0) rec(ix + 1)
+          else r
+        } else 0
+      rec(0)
+    }
   }
 
   import spray.json.DefaultJsonProtocol._
