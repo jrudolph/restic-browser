@@ -104,7 +104,7 @@ sealed trait TreeNode extends Product {
 }
 case class TreeLeaf(
     name:    CachedName.T,
-    size:    Long,
+    size:    Option[Long],
     content: Vector[Hash]
 ) extends TreeNode {
   override def isBranch: Boolean = false
