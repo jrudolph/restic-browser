@@ -5,8 +5,9 @@ import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
 
 import java.io.File
-import scala.concurrent.Future
-import scala.util.Success
+import scala.concurrent.{ Await, Future }
+import scala.concurrent.duration._
+import scala.util.{ Failure, Success }
 
 object FileExtension {
   implicit class FileImplicits(val f: File) extends AnyVal {
@@ -35,12 +36,12 @@ object ResticReaderMain extends App {
   val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
   val backingDir = new File("/tmp/restic-repo")
   val cacheDir = {
-    val res = new File("restic-cache")
+    val res = new File("../restic-cache")
     res.mkdirs()
     res
   }
   val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
-  val indexFile = new File("index.out")
+  val indexFile = new File("../index.out")
 
   //val indexFiles = reader.allFiles(indexDir)
   //println(indexFiles.size)
@@ -53,7 +54,13 @@ object ResticReaderMain extends App {
       .runWith(Sink.seq)
       .map(_.toMap)
   }
-  lazy val index = bench("loadIndex")(loadIndex())
+
+  if (!indexFile.exists()) {
+    val idx = benchSync("loadIndex")(Await.result(loadIndex(), 30.seconds))
+    benchSync("writeIndex")(Index.writeIndexFile(indexFile, idx))
+  }
+
+  //lazy val index = bench("loadIndex")(loadIndex())
   /*index.onComplete {
     case Success(res) =>
       //System.gc()
@@ -74,12 +81,12 @@ object ResticReaderMain extends App {
       tree <- reader.loadTree(p, b)
     } yield tree
 
-  lazy val allTrees: Future[Seq[Hash]] =
+  /*lazy val allTrees: Future[Seq[Hash]] =
     index.map { i =>
       benchSync("allTrees") {
         i.values.filter(_._2.isTree).map(_._2.id).toVector
       }
-    }
+    }*/
 
   def walkTreeNodes(blob: TreeBlob): Source[TreeNode, NotUsed] = {
     val subtrees = blob.nodes.collect { case b: TreeBranch => b }
@@ -168,6 +175,8 @@ object ResticReaderMain extends App {
         }
 
         system.terminate()
+      case Failure(ex) =>
+        ex.printStackTrace()
     }
 
   /*loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")

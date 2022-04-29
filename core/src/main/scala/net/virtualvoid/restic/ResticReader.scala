@@ -19,7 +19,7 @@ class ResticReader(
     cpuBoundExecutor: ExecutionContext,
     blockingExecutor: ExecutionContext) {
   val secret = {
-    val fis = new FileInputStream("secret")
+    val fis = new FileInputStream("../secret")
     val res = new Array[Byte](32)
     val read = fis.read(res)
     require(read == 32)
