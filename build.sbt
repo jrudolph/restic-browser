@@ -1,4 +1,10 @@
+
 val scalaV = "2.13.8"
+
+val akkaV = "2.6.19"
+val akkaHttpV = "10.2.9"
+val sprayJsonV = "1.3.6"
+
 val scalaTestV = "3.2.10"
 
 inThisBuild(Def.settings(
@@ -11,8 +17,8 @@ lazy val core =
   project
     .settings(
       libraryDependencies ++= Seq(
-        "com.typesafe.akka" %% "akka-stream" % "2.6.19",
-        "io.spray" %% "spray-json" % "1.3.6",
+        "com.typesafe.akka" %% "akka-stream" % akkaV,
+        "io.spray" %% "spray-json" % sprayJsonV,
         "org.scalatest" %% "scalatest" % scalaTestV % "test",
       )
     )
@@ -34,4 +40,28 @@ lazy val core =
       paradoxProperties ++= Map(
         "github.base_url" -> (Compile / paradoxMaterialTheme).value.properties.getOrElse("repo", "")
       )
+    )
+
+lazy val web =
+  project
+    .dependsOn(core)
+    .enablePlugins(SbtTwirl, BuildInfoPlugin)
+    .settings(
+      libraryDependencies ++= Seq(
+        "com.typesafe.akka" %% "akka-http" % akkaHttpV,
+        "org.scalatest" %% "scalatest" % scalaTestV % "test",
+      ),
+      // Fix broken watchSources support in play/twirl, https://github.com/playframework/twirl/issues/186
+      // watch sources support
+      watchSources +=
+        WatchSource(
+          (TwirlKeys.compileTemplates / sourceDirectory).value,
+          "*.scala.*",
+          (excludeFilter in Global).value
+        ),
+
+      buildInfoPackage := "net.virtualvoid.restic.web",
+      buildInfoKeys ++= Seq(
+        "longProjectName" -> "Restic Repository Browser"
+      ),
     )
