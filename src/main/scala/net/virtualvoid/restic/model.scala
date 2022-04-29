@@ -2,15 +2,65 @@ package net.virtualvoid.restic
 
 import spray.json._
 
-sealed trait Hash
+import java.nio.ByteBuffer
+import java.util
+import scala.annotation.tailrec
+
+final class Hash private (val bytes: Array[Byte]) {
+  override lazy val hashCode: Int =
+    ((bytes(0) & 0xff) << 24) |
+      ((bytes(1) & 0xff) << 16) |
+      ((bytes(2) & 0xff) << 8) |
+      (bytes(3) & 0xff)
+
+  override def equals(obj: Any): Boolean = obj match {
+    case h2: Hash => java.util.Arrays.equals(bytes, h2.bytes)
+    case _        => false
+  }
+
+  def prefix60AsLong: Long = ByteBuffer.wrap(bytes).getLong >>> 4
+
+  override def toString: String = {
+    val chArray = new Array[Char](bytes.length * 2)
+    def intToHex(i: Int): Char =
+      if (i >= 0 && i < 10) ('0' + i).toChar
+      else if (i < 16) ('a' + i - 10).toChar
+      else throw new IllegalArgumentException(s"Cannot convert to hex: $i")
+
+    @tailrec def rec(ix: Int): String =
+      if (ix < bytes.length) {
+        chArray(ix * 2) = intToHex((bytes(ix) & 0xf0) >> 4)
+        chArray(ix * 2 + 1) = intToHex((bytes(ix) & 0x0f))
+        rec(ix + 1)
+      } else new String(chArray)
+    rec(0)
+  }
+}
 object Hash {
-  type T = String with Hash
+  def unsafe(bytes: Array[Byte]): Hash = new Hash(bytes)
+  def apply(string: String): Hash = {
+    def hexToInt(ch: Char): Int =
+      if (ch >= '0' && ch <= '9') ch - '0'
+      else if (ch >= 'a' && ch <= 'f') (ch - 'a') + 10
+      else throw new IllegalArgumentException(s"not a hex char: '$ch' ${ch.toInt}")
+    @tailrec def rec(ix: Int, buffer: Array[Byte]): Hash =
+      if (ix < string.length) {
+        buffer(ix / 2) = ((hexToInt(string.charAt(ix)) << 4) | hexToInt(string.charAt(ix + 1))).toByte
+        rec(ix + 2, buffer)
+      } else new Hash(buffer)
+
+    rec(0, new Array[Byte](string.length / 2))
+  }
+
+  implicit val hashOrder: Ordering[Hash] = new Ordering[Hash] {
+    override def compare(x: Hash, y: Hash): Int = util.Arrays.compare(x.bytes, y.bytes)
+  }
 
   import spray.json.DefaultJsonProtocol._
-  private val simpleHashFormat: JsonFormat[Hash.T] =
+  private val simpleHashFormat: JsonFormat[Hash] =
     // use truncated hashes for lesser memory usage
-    JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x /*.take(12)*/ .asInstanceOf[T])
-  implicit val hashFormat: JsonFormat[Hash.T] = DeduplicationCache.cachedFormat(simpleHashFormat)
+    JsonExtra.deriveFormatFrom[String].apply[Hash](_.toString, apply(_))
+  implicit val hashFormat: JsonFormat[Hash] = DeduplicationCache.cachedFormat(simpleHashFormat)
 }
 
 sealed trait BlobType
@@ -42,13 +92,13 @@ sealed trait TreeNode extends Product {
 }
 case class TreeLeaf(
     name:    CachedName.T,
-    content: Vector[Hash.T]
+    content: Vector[Hash]
 ) extends TreeNode {
   override def isBranch: Boolean = false
 }
 case class TreeBranch(
     name:    CachedName.T,
-    subtree: Hash.T
+    subtree: Hash
 ) extends TreeNode {
   override def isBranch: Boolean = true
 }
@@ -79,7 +129,7 @@ object TreeBlob {
 }
 
 case class PackBlob(
-    id:     Hash.T,
+    id:     Hash,
     `type`: BlobType,
     offset: Long,
     length: Int
@@ -88,7 +138,7 @@ case class PackBlob(
   def isData: Boolean = `type` == BlobType.Data
 }
 case class PackIndex(
-    id:    Hash.T,
+    id:    Hash,
     blobs: Vector[PackBlob]
 )
 case class IndexFile(

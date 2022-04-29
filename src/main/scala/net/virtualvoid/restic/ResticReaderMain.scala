@@ -46,7 +46,7 @@ object ResticReaderMain extends App {
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  def loadIndex(): Future[Map[String, (Hash.T, PackBlob)]] = {
+  def loadIndex(): Future[Map[Hash, (Hash, PackBlob)]] = {
     Source(reader.allFiles(reader.indexDir))
       .mapAsync(1024)(reader.loadIndex)
       .mapConcat(_.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
@@ -67,14 +67,14 @@ object ResticReaderMain extends App {
 
   lazy val index2: Future[Index] = Future.successful(Index.load(indexFile))
 
-  def loadTree(id: String): Future[TreeBlob] =
+  def loadTree(id: Hash): Future[TreeBlob] =
     for {
       i <- index2
-      (p, b) = i.lookup(id.asInstanceOf[Hash.T])
+      (p, b) = i.lookup(id)
       tree <- reader.loadTree(p, b)
     } yield tree
 
-  lazy val allTrees: Future[Seq[Hash.T]] =
+  lazy val allTrees: Future[Seq[Hash]] =
     index.map { i =>
       benchSync("allTrees") {
         i.values.filter(_._2.isTree).map(_._2.id).toVector
@@ -90,19 +90,19 @@ object ResticReaderMain extends App {
   }
 
   sealed trait Reference
-  case class SnapshotReference(id: Hash.T) extends Reference
-  case class TreeReference(treeBlobId: Hash.T, node: TreeNode) extends Reference
-  case class BlobReference(id: Hash.T, referenceChain: Seq[Reference]) {
+  case class SnapshotReference(id: Hash) extends Reference
+  case class TreeReference(treeBlobId: Hash, node: TreeNode) extends Reference
+  case class BlobReference(id: Hash, referenceChain: Seq[Reference]) {
     def chainString: String = {
       def refString(ref: Reference): String = ref match {
-        case SnapshotReference(id)  => s"snap:${id.take(10)}"
+        case SnapshotReference(id)  => s"snap:${id.toString.take(10)}"
         case TreeReference(_, node) => node.name
       }
 
       referenceChain.reverse.map(refString).mkString("/")
     }
   }
-  def reverseReferences(treeId: Hash.T, chain: List[Reference]): Future[Vector[BlobReference]] =
+  def reverseReferences(treeId: Hash, chain: List[Reference]): Future[Vector[BlobReference]] =
     loadTree(treeId).flatMap { blob =>
       val subdirs = blob.nodes.collect { case b: TreeBranch => b }
 
@@ -152,7 +152,7 @@ object ResticReaderMain extends App {
         .onComplete(println)
     }*/
 
-  reverseReferences("a5b1b14e1b87f8e4804604065179d8edfd0815752b386b18de8660d099856d70".asInstanceOf[Hash.T], Nil)
+  reverseReferences(Hash("a5b1b14e1b87f8e4804604065179d8edfd0815752b386b18de8660d099856d70"), Nil)
     .onComplete {
       case Success(v) =>
         println(s"Got ${v.size} entries")

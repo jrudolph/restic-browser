@@ -1,6 +1,6 @@
 package net.virtualvoid.restic
 
-import net.virtualvoid.restic.Hash.T
+import net.virtualvoid.restic.Hash
 
 import java.io.{ BufferedOutputStream, File, FileOutputStream }
 import java.nio.ByteOrder
@@ -9,14 +9,14 @@ import java.nio.channels.FileChannel.MapMode
 import scala.annotation.tailrec
 
 trait Index {
-  def lookup(blobId: Hash.T): (Hash.T, PackBlob)
+  def lookup(blobId: Hash): (Hash, PackBlob)
 
-  def find(blobId: Hash.T): (Int, Int)
-  def allKeys: IndexedSeq[Hash.T]
+  def find(blobId: Hash): (Int, Int)
+  def allKeys: IndexedSeq[Hash]
 }
 
 object Index {
-  def writeIndexFile(indexFile: File, index: Map[String, (Hash.T, PackBlob)]): Unit = {
+  def writeIndexFile(indexFile: File, index: Map[Hash, (Hash, PackBlob)]): Unit = {
     val keys = index.keys.toVector.sorted
     val fos = new BufferedOutputStream(new FileOutputStream(indexFile), 1000000)
 
@@ -26,13 +26,9 @@ object Index {
       fos.write(value >> 16)
       fos.write(value >> 24)
     }
-    def hash(hash: String): Unit = {
-      require(hash.length == 64)
-      var i = 0
-      while (i < 32) {
-        fos.write(Integer.parseInt(hash, i * 2, i * 2 + 2, 16))
-        i += 1
-      }
+    def hash(hash: Hash): Unit = {
+      require(hash.bytes.length == 64)
+      fos.write(hash.bytes)
     }
 
     keys.foreach { blobId =>
@@ -62,28 +58,28 @@ object Index {
     def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
 
     new Index {
-      override def allKeys: IndexedSeq[Hash.T] = new IndexedSeq[Hash.T] {
+      override def allKeys: IndexedSeq[Hash] = new IndexedSeq[Hash] {
         override def length: Int = numEntries
 
-        override def apply(i: Int): T = {
+        override def apply(i: Int): Hash = {
           val targetPackHashBytes = {
             val dst = new Array[Byte](32)
             indexBuffer.asReadOnlyBuffer.position(i * EntrySize).get(dst)
             dst
           }
-          targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
+          Hash.unsafe(targetPackHashBytes)
         }
       }
 
-      override def lookup(blobId: Hash.T): (Hash.T, PackBlob) = {
-        def entryAt(idx: Int, step: Int): (Hash.T, PackBlob) = {
+      override def lookup(blobId: Hash): (Hash, PackBlob) = {
+        def entryAt(idx: Int, step: Int): (Hash, PackBlob) = {
           val targetBaseOffset = idx * EntrySize
           val targetPackHashBytes = {
             val dst = new Array[Byte](32)
             indexBuffer.asReadOnlyBuffer.position(targetBaseOffset + 32).get(dst)
             dst
           }
-          val targetPackHash = targetPackHashBytes.map("%02x".format(_)).mkString.asInstanceOf[Hash.T]
+          val targetPackHash = Hash.unsafe(targetPackHashBytes)
           val offsetAndType = intBuffer.get((targetBaseOffset + 64) >> 2)
           val length = intBuffer.get((targetBaseOffset + 68) >> 2)
           val offset = offsetAndType & 0x7fffffff
@@ -98,8 +94,8 @@ object Index {
         entryAt(idx, step)
       }
 
-      def find(blobId: Hash.T): (Int, Int) = {
-        val targetKey = java.lang.Long.parseLong(blobId.take(15), 16)
+      def find(blobId: Hash): (Int, Int) = {
+        val targetKey = blobId.prefix60AsLong
 
         def interpolate(left: Int, right: Int): Int = {
           val leftKey = keyAt(left)

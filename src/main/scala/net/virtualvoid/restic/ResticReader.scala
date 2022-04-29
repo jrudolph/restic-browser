@@ -43,7 +43,7 @@ class ResticReader(
     val len =
       if (length == -1) (file.length() - offset).toInt
       else length
-    mapped.position(offset.toInt).limit(offset.toInt + len).asInstanceOf[ByteBuffer]
+    mapped.position(offset.toInt).limit(offset.toInt + len)
   }(blockingExecutor).map(decryptBlob)(cpuBoundExecutor)
 
   def decryptBlob(blob: ByteBuffer): Array[Byte] = {
@@ -60,10 +60,10 @@ class ResticReader(
     outputBuffer.array()
   }
 
-  def packFile(id: Hash.T): File = {
+  def packFile(id: Hash): File = {
     import FileExtension._
 
-    val path = s"${id.take(2)}/$id"
+    val path = s"${id.toString.take(2)}/$id"
     val res = new File(dataDir, path).resolved
     if (res.exists()) res
     else {
@@ -80,7 +80,7 @@ class ResticReader(
     }
   }
 
-  def loadTree(pack: Hash.T, blob: PackBlob): Future[TreeBlob] =
+  def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
     readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
 
   def loadIndex(file: File): Future[IndexFile] =
