@@ -47,13 +47,14 @@ object ResticReaderMain extends App {
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  def loadIndex(): Future[Map[Hash, (Hash, PackBlob)]] = {
-    Source(reader.allFiles(reader.indexDir))
-      .mapAsync(1024)(reader.loadIndex)
-      .mapConcat(_.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
-      .runWith(Sink.seq)
-      .map(_.toMap)
-  }
+  def loadIndex(): Future[Map[Hash, (Hash, PackBlob)]] =
+    Future.traverse(reader.allFiles(reader.indexDir))(f => reader.loadIndex(f).map(Hash(f.getName) -> _)).map { indices =>
+      val allSuperseded = indices.flatMap(_._2.realSupersedes).toSet
+      val withoutSuperseded = indices.toMap -- allSuperseded
+      println(s"${allSuperseded.size} indices were superseded, ignored ${indices.size - withoutSuperseded.size} superseded index files")
+      val allEntries = withoutSuperseded.flatMap(_._2.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
+      allEntries.toMap
+    }
 
   if (!indexFile.exists()) {
     val idx = benchSync("loadIndex")(Await.result(loadIndex(), 30.seconds))

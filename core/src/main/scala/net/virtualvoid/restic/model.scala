@@ -158,11 +158,14 @@ case class PackIndex(
     blobs: Vector[PackBlob]
 )
 case class IndexFile(
-    packs: Seq[PackIndex]
-)
+    supersedes: Option[Seq[Hash]],
+    packs:      Seq[PackIndex]
+) {
+  def realSupersedes = supersedes.getOrElse(Nil)
+}
 object IndexFile {
   import spray.json.DefaultJsonProtocol._
   implicit val packBlobFormat = jsonFormat4(PackBlob.apply _)
   implicit val packIndexFormat = jsonFormat2(PackIndex.apply _)
-  implicit val indexFileFormat = jsonFormat1(IndexFile.apply _)
+  implicit val indexFileFormat = jsonFormat2(IndexFile.apply _)
 }
