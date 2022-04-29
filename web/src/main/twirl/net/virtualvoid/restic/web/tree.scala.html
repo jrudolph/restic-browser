@@ -2,6 +2,8 @@
 
 @(hash: Hash, tree: TreeBlob)
 
+<h3>@hash</h3>
+
 <table>
 @for(node <- tree.nodes.sortBy(n => (!n.isBranch, n.name))) {
     @if(node.isBranch) {
