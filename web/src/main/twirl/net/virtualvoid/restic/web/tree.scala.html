@@ -11,7 +11,7 @@
         <tr><td><a href="@{node.asInstanceOf[TreeBranch].subtree}">@{node.name}</a></td></tr>
     } else if (node.isLeaf) {
         <tr>
-            <td>@{node.name}</td>
+            <td><a href="@hash/@{node.name}">@{node.name}</a></td>
             <td class="num-cell">@{node.asInstanceOf[TreeLeaf].size.getOrElse(0)}</td>
             <td class="num-cell">@{node.asInstanceOf[TreeLeaf].content.size}</td>
         </tr>

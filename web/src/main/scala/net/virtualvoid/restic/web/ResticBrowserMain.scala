@@ -26,9 +26,14 @@ object ResticBrowserMain extends App {
     val reader: ResticReader = _reader
     val index: Index = Index.load(indexFile)
 
-    override def loadTree(id: Hash): Future[TreeBlob] = {
-      val (p, b) = index.lookup(id)
+    override def loadTree(hash: Hash): Future[TreeBlob] = {
+      val (p, b) = index.lookup(hash)
       reader.loadTree(p, b)
+    }
+
+    override def loadBlob(hash: Hash): Future[Array[Byte]] = {
+      val (p, b) = index.lookup(hash)
+      reader.loadBlob(p, b)
     }
   }
 

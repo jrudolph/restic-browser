@@ -1,0 +1,27 @@
+@import net.virtualvoid.restic._
+
+@(hash: Hash, name: String, leaf: TreeLeaf, hexDump: String, app: web.ResticApp)
+
+<h3>Meta</h3>
+<table>
+    <tr><th>Filename</th><td>@name</td></tr>
+    <tr><th>Size</th><td>@{leaf.size}</td></tr>
+    <tr><th>Num Parts</th><td>@{leaf.content.size}</td></tr>
+</table>
+
+<h3>Contents (@{leaf.content.size} parts)</h3>
+<table>
+    <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th></tr>
+@for(b <- leaf.content; (pack, blob) = app.index.lookup(b)) {
+    <tr>
+        <td class="hash">@{b.toString.take(16)}</td>
+        <td class="hash">@{pack.toString.take(16)}</td>
+        <td class="num-cell">@{blob.offset}</td>
+        <td class="num-cell">@{blob.length}</td>
+    </tr>
+}
+</table>
+
+<h3>Hexdump</h3>
+
+<code><pre>@hexDump</pre></code>
