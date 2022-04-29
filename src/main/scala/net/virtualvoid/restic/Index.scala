@@ -27,7 +27,7 @@ object Index {
       fos.write(value >> 24)
     }
     def hash(hash: Hash): Unit = {
-      require(hash.bytes.length == 64)
+      require(hash.bytes.length == 32)
       fos.write(hash.bytes)
     }
 
