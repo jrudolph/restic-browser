@@ -1,0 +1,13 @@
+@import net.virtualvoid.restic._
+
+@(hash: Hash, tree: TreeBlob)
+
+<table>
+@for(node <- tree.nodes.sortBy(n => (!n.isBranch, n.name))) {
+    @if(node.isBranch) {
+        <tr><td><a href="@{node.asInstanceOf[TreeBranch].subtree}">@{node.name}</a></td></tr>
+    } else if (node.isLeaf) {
+        <tr><td>@{node.name}</td><td>@{node.asInstanceOf[TreeLeaf].size}</td></tr>
+    }
+}
+</table>

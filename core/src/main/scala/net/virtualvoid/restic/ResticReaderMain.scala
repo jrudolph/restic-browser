@@ -116,8 +116,8 @@ object ResticReaderMain extends App {
       val leaves =
         blob.nodes
           .flatMap {
-            case node @ TreeLeaf(_, content) =>
-              content.map(c => BlobReference(c, TreeReference(treeId, node) :: chain))
+            case node: TreeLeaf =>
+              node.content.map(c => BlobReference(c, TreeReference(treeId, node) :: chain))
             case _ => Vector.empty
           }
 

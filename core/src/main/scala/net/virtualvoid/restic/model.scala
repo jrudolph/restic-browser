@@ -100,31 +100,36 @@ object CachedName {
 sealed trait TreeNode extends Product {
   def name: String
   def isBranch: Boolean
+  def isLeaf: Boolean
 }
 case class TreeLeaf(
     name:    CachedName.T,
+    size:    Long,
     content: Vector[Hash]
 ) extends TreeNode {
   override def isBranch: Boolean = false
+  override def isLeaf: Boolean = true
 }
 case class TreeBranch(
     name:    CachedName.T,
     subtree: Hash
 ) extends TreeNode {
   override def isBranch: Boolean = true
+  override def isLeaf: Boolean = false
 }
 case class TreeLink(
     name:       CachedName.T,
     linktarget: String
 ) extends TreeNode {
   override def isBranch: Boolean = false
+  override def isLeaf: Boolean = false
 }
 case class TreeBlob(
     nodes: Vector[TreeNode]
 )
 object TreeBlob {
   import spray.json.DefaultJsonProtocol._
-  implicit val leafFormat = jsonFormat2(TreeLeaf.apply _)
+  implicit val leafFormat = jsonFormat3(TreeLeaf.apply _)
   implicit val branchFormat = jsonFormat2(TreeBranch.apply _)
   implicit val linkFormat = jsonFormat2(TreeLink.apply _)
   implicit val nodeFormat = new JsonFormat[TreeNode] {
