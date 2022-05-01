@@ -63,9 +63,8 @@ object Index {
 
     val file = FileChannel.open(indexFile.toPath)
     val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
-    val intBuffer = indexBuffer.duplicate().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
     val numEntries = ((indexFile.length() - HeaderSize) / EntrySize).toInt
-    println(s"Found $numEntries")
+    println(s"[${indexFile.getName}] Found $numEntries")
 
     val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
 

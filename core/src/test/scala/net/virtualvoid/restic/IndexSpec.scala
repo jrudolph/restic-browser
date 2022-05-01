@@ -22,7 +22,7 @@ class IndexSpec extends AnyFreeSpec with Matchers {
 
       val data = Vector.fill(10000)(randomPackEntry())
       val indexed = data.groupBy(_.id).view.mapValues(_.head).toMap
-      val tmpFile = File.createTempFile("index", "idx", new File("/tmp"))
+      val tmpFile = File.createTempFile("index", ".idx", new File("/tmp"))
       tmpFile.deleteOnExit()
       Index.writeIndexFile(tmpFile, indexed)
       val index = Index.load(tmpFile)
