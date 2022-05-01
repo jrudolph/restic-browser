@@ -1,10 +1,14 @@
 package net.virtualvoid.restic
 
-import java.io.{ BufferedOutputStream, File, FileOutputStream, OutputStream }
+import akka.stream.Materializer
+import akka.stream.scaladsl.Source
+
+import java.io.{BufferedOutputStream, File, FileOutputStream, OutputStream}
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import scala.annotation.tailrec
+import scala.concurrent.Future
 
 trait Writer {
   def uint32le(value: Int): Unit
@@ -30,8 +34,9 @@ trait Index[T] {
 }
 
 object Index {
-  def writeIndexFile[T: Serializer](indexFile: File, data: Iterable[(Hash, T)]): Unit = {
+  def createIndex[T: Serializer](indexFile: File, data: Source[(Hash, T), Any])(implicit mat: Materializer): Future[Index[T]] = {
     val serializer = implicitly[Serializer[T]]
+    import mat.executionContext
 
     def osWriter(os: OutputStream): Writer =
       new Writer {
@@ -57,106 +62,112 @@ object Index {
     //    - (in parallel) put values into right places into index file (using VarHandle to update bucket index array)
     //    - (in parallel) finally sort buckets
     // 3: optionally concat index and values (dropping the extra index)
-    val tmpDataFile = File.createTempFile(s".${indexFile.getName}-values", ".tmp", indexFile.getParentFile)
-    tmpDataFile.deleteOnExit()
 
-    println(s"Stream data to tmp file ${tmpDataFile}") //
-    //
+    def streamDataOut(): Future[File] = {
+      val tmpDataFile = File.createTempFile(s".${indexFile.getName}-values", ".tmp", indexFile.getParentFile)
+      tmpDataFile.deleteOnExit()
 
-    {
+      println(s"Stream data to tmp file ${tmpDataFile}")
       val dataOut = new BufferedOutputStream(new FileOutputStream(tmpDataFile), 1000000)
       val dataWriter = osWriter(dataOut)
 
-      data.foreach {
+      data.runForeach {
         case (id, value) =>
           dataWriter.hash(id)
           serializer.write(id, value, dataWriter)
+      }.map { _ =>
+        dataOut.close()
+        tmpDataFile
       }
-      dataOut.close()
     }
 
-    val HeaderSize = 0
-    val EntrySize = 32 /* hash size */ + serializer.entrySize
+    def storeIndex(tmpDataFile: File): Index[T] = {
+      val HeaderSize = 0
+      val EntrySize = 32 /* hash size */ + serializer.entrySize
 
-    val dataChannel = FileChannel.open(tmpDataFile.toPath)
-    val buffer = dataChannel.map(MapMode.READ_ONLY, 0, tmpDataFile.length())
-    val longBEBuffer = buffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
-    def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
+      val dataChannel = FileChannel.open(tmpDataFile.toPath)
+      val buffer = dataChannel.map(MapMode.READ_ONLY, 0, tmpDataFile.length())
+      val longBEBuffer = buffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
 
-    val numEntries = ((tmpDataFile.length() - HeaderSize) / EntrySize).toInt
+      def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
 
-    // round down to previous power of 2
-    val bucketBits = 32 - Integer.numberOfLeadingZeros(numEntries) - 2
-    val buckets = 1 << bucketBits
-    println(s"Creating $buckets buckets ($bucketBits bits) for $numEntries entries")
+      val numEntries = ((tmpDataFile.length() - HeaderSize) / EntrySize).toInt
 
-    // create histogram - size: ~ buckets bytes
-    val bucketHistogram = Array.fill[Byte](buckets)(0) // TODO: use one array for offsets + bucketHistogram
-    (0 until numEntries).foreach { i =>
-      val key = keyAt(i)
-      val bucket = (key >>> (60 - bucketBits)).toInt
-      val n = bucketHistogram(bucket)
-      //println(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
-      require(n < Byte.MaxValue)
-      bucketHistogram(bucket) = (n + 1).toByte
-    }
-    // find cumulative offsets - size: ~ buckets * 4 bytes
-    val offsets = bucketHistogram.scanLeft(0)(_ + _) // .dropRight(1) - right-most entry can be ignored
+      // round down to previous power of 2
+      val bucketBits = math.max(1, 32 - Integer.numberOfLeadingZeros(numEntries) - 4)
+      val buckets = 1 << bucketBits
+      println(s"Creating $buckets buckets ($bucketBits bits) for $numEntries entries")
 
-    // populate results - size: ~ numEntries * 4 bytes
-    val indices = Array.fill[Int](numEntries)(0)
-    (0 until numEntries).foreach { i =>
-      val key = keyAt(i)
-      val bucket = (key >>> (60 - bucketBits)).toInt
-      val o = offsets(bucket)
-      indices(o) = i
-      offsets(bucket) += 1
-    }
+      // create histogram - size: ~ buckets bytes
+      val bucketHistogram = Array.fill[Byte](buckets)(0) // TODO: use one array for offsets + bucketHistogram
+      (0 until numEntries).foreach { i =>
+        val key = keyAt(i)
+        val bucket = (key >>> (60 - bucketBits)).toInt
+        val n = bucketHistogram(bucket)
+        //println(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
+        require(n < Byte.MaxValue)
+        bucketHistogram(bucket) = (n + 1).toByte
+      }
+      // find cumulative offsets - size: ~ buckets * 4 bytes
+      val offsets = bucketHistogram.scanLeft(0)(_ + _) // .dropRight(1) - right-most entry can be ignored
 
-    // sort buckets
-    {
-      var at = 0
-      var bucket = 0
-      while (bucket < buckets) {
-        val end = offsets(bucket)
-        while (at < end) {
-          //println(f"at: $at%10d bucket: $bucket%10d")
-          val targetKey = keyAt(indices(at))
+      // populate results - size: ~ numEntries * 4 bytes
+      val indices = Array.fill[Int](numEntries)(0)
+      (0 until numEntries).foreach { i =>
+        val key = keyAt(i)
+        val bucket = (key >>> (60 - bucketBits)).toInt
+        val o = offsets(bucket)
+        indices(o) = i
+        offsets(bucket) += 1
+      }
 
-          var pos = at - 1
-          while (pos >= 0 && {
-            val cand = keyAt(indices(pos))
-            //println(f"at: $at%10d end: $end%10d bucket: $bucket%10d pos: $pos%10d targetKey: $targetKey%015x $cand%015x")
-            targetKey < cand
-          }) {
+      // sort buckets
+      {
+        var at = 0
+        var bucket = 0
+        while (bucket < buckets) {
+          val end = offsets(bucket)
+          while (at < end) {
+            //println(f"at: $at%10d bucket: $bucket%10d")
+            val targetKey = keyAt(indices(at))
 
-            // swap down to find final position
-            val x = indices(pos)
-            indices(pos) = indices(pos + 1)
-            indices(pos + 1) = x
-            pos -= 1
+            var pos = at - 1
+            while (pos >= 0 && {
+              val cand = keyAt(indices(pos))
+              //println(f"at: $at%10d end: $end%10d bucket: $bucket%10d pos: $pos%10d targetKey: $targetKey%015x $cand%015x")
+              targetKey < cand
+            }) {
+
+              // swap down to find final position
+              val x = indices(pos)
+              indices(pos) = indices(pos + 1)
+              indices(pos + 1) = x
+              pos -= 1
+            }
+
+            at += 1
           }
 
-          at += 1
+          bucket += 1
         }
-
-        bucket += 1
       }
-    }
 
-    // Copy out entries in the right order
-    val tmpIndexFile = File.createTempFile(s".${indexFile.getName}-indices", ".tmp", indexFile.getParentFile)
-    val out = new BufferedOutputStream(new FileOutputStream(tmpIndexFile), 1000000) //
-    val b = new Array[Byte](EntrySize)
-    indices.foreach { i =>
-      buffer.position(i * EntrySize).get(b)
-      out.write(b)
-    }
-    out.close()
+      // Copy out entries in the right order
+      val tmpIndexFile = File.createTempFile(s".${indexFile.getName}-indices", ".tmp", indexFile.getParentFile)
+      val out = new BufferedOutputStream(new FileOutputStream(tmpIndexFile), 1000000) //
+      val b = new Array[Byte](EntrySize)
+      indices.foreach { i =>
+        buffer.position(i * EntrySize).get(b)
+        out.write(b)
+      }
+      out.close()
 
-    dataChannel.close()
-    tmpDataFile.delete()
-    tmpIndexFile.renameTo(indexFile)
+      dataChannel.close()
+      tmpDataFile.delete()
+      tmpIndexFile.renameTo(indexFile)
+      load(indexFile)
+    }
+    streamDataOut().map(storeIndex)
   }
 
   def load[T: Serializer](indexFile: File): Index[T] = {

@@ -1,12 +1,19 @@
 package net.virtualvoid.restic
 
+import akka.actor.ActorSystem
+import akka.stream.scaladsl.Source
+import org.scalatest.BeforeAndAfterAll
+import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.freespec.AnyFreeSpec
 import org.scalatest.matchers.should.Matchers
 
 import java.io.File
+import scala.concurrent.duration._
 import scala.util.Random
 
-class IndexSpec extends AnyFreeSpec with Matchers {
+class IndexSpec extends AnyFreeSpec with Matchers with BeforeAndAfterAll with ScalaFutures {
+  implicit val system = ActorSystem()
+  override implicit val patienceConfig = PatienceConfig(5.seconds)
   "Index should" - {
     "work for pack index" in {
       implicit val indexEntrySerializer = PackBlobSerializer
@@ -24,8 +31,7 @@ class IndexSpec extends AnyFreeSpec with Matchers {
       val indexed = data.groupBy(_.id).view.mapValues(_.head).toMap
       val tmpFile = File.createTempFile("index", ".idx", new File("/tmp"))
       tmpFile.deleteOnExit()
-      Index.writeIndexFile(tmpFile, indexed)
-      val index = Index.load(tmpFile)
+      val index = Index.createIndex(tmpFile, Source(indexed)).futureValue
 
       indexed.keys.foreach { k =>
         index.lookup(k) shouldEqual indexed(k)
@@ -34,4 +40,6 @@ class IndexSpec extends AnyFreeSpec with Matchers {
     "handle conflicts after first 60 bits of hash" in pending
     "support returning more than one match" in pending
   }
+
+  override protected def afterAll(): Unit = system.terminate()
 }

@@ -51,21 +51,22 @@ object ResticReaderMain extends App {
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  def loadIndex(): Future[Map[Hash, PackEntry]] =
-    Future.traverse(reader.allFiles(reader.indexDir))(f => reader.loadIndex(f).map(Hash(f.getName) -> _)).map { indices =>
+  /*def loadIndex(): Future[Map[Hash, PackEntry]] =
+    Future.traverse(reader.allFiles(reader.indexDir))(f => ).map { indices =>
       val allSuperseded = indices.flatMap(_._2.realSupersedes).toSet
       val withoutSuperseded = indices.toMap -- allSuperseded
       println(s"${allSuperseded.size} indices were superseded, ignored ${indices.size - withoutSuperseded.size} superseded index files")
       val allEntries = withoutSuperseded.flatMap(_._2.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length))))
       allEntries
-    }
+    }*/
+  def allIndexEntries: Source[(Hash, PackEntry), Any] =
+    Source(reader.allFiles(reader.indexDir))
+      .mapAsync(128)(f => reader.loadIndex(f))
+      .mapConcat { packIndex =>
+        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
+      }
 
   implicit val indexEntrySerializer = PackBlobSerializer
-
-  if (!indexFile.exists()) {
-    val idx = benchSync("loadIndex")(Await.result(loadIndex(), 30.seconds))
-    benchSync("writeIndex")(Index.writeIndexFile(indexFile, idx))
-  }
 
   //lazy val index = bench("loadIndex")(loadIndex())
   /*index.onComplete {
@@ -79,7 +80,9 @@ object ResticReaderMain extends App {
     //Thread.sleep(100000)
   }*/
 
-  lazy val index2: Future[Index[PackEntry]] = Future.successful(Index.load(indexFile))
+  lazy val index2: Future[Index[PackEntry]] =
+    if (indexFile.exists()) Future.successful(Index.load(indexFile))
+    else bench("writeIndex")(Index.createIndex(indexFile, allIndexEntries))
 
   def loadTree(id: Hash): Future[TreeBlob] =
     for {
