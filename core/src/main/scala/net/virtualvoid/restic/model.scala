@@ -169,3 +169,20 @@ object IndexFile {
   implicit val packIndexFormat = jsonFormat2(PackIndex.apply _)
   implicit val indexFileFormat = jsonFormat2(IndexFile.apply _)
 }
+
+case class Snapshot(
+    time:     String,
+    parent:   Option[Hash],
+    tree:     Hash,
+    paths:    Seq[String],
+    hostname: String,
+    tags:     Seq[String],
+    username: String,
+    uid:      Option[Int],
+    gid:      Option[Int],
+    excludes: Option[Seq[String]]
+)
+object Snapshot {
+  import spray.json.DefaultJsonProtocol._
+  implicit val snapshotFormat = jsonFormat10(Snapshot.apply _)
+}
