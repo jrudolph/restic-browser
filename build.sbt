@@ -5,13 +5,13 @@ val akkaV = "2.6.19"
 val akkaHttpV = "10.2.9"
 val sprayJsonV = "1.3.6"
 
-val scalaTestV = "3.2.10"
+val scalaTestV = "3.2.11"
 
 inThisBuild(Def.settings(
   scalaVersion := scalaV
 ))
 
-lazy val root = Project(id = "root", base = file(".")).aggregate(core)
+lazy val root = Project(id = "root", base = file(".")).aggregate(core, web)
 
 lazy val core =
   project
