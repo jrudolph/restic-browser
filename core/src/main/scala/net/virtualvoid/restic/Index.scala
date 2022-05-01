@@ -115,8 +115,6 @@ object Index {
 
     // sort buckets
     {
-      //buffer.load()
-      println(s"${tmpDataFile.length()} ${dataChannel.size()} ${buffer.isLoaded}")
       var at = 0
       var bucket = 0
       while (bucket < buckets) {
