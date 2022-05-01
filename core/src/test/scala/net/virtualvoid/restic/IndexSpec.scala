@@ -1,0 +1,34 @@
+package net.virtualvoid.restic
+
+import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.matchers.should.Matchers
+
+import java.io.File
+import scala.util.Random
+
+class IndexSpec extends AnyFreeSpec with Matchers {
+  "Index should" - {
+    "work for pack index" in {
+      val random = new Random
+      def randomPackBlob(): (Hash, PackBlob) = {
+        val target = Hash.unsafe(random.nextBytes(32))
+        val pack = Hash.unsafe(random.nextBytes(32))
+        val offset = random.nextInt(Int.MaxValue)
+        val length = random.nextInt(Int.MaxValue)
+        val tpe = if (random.nextBoolean()) BlobType.Tree else BlobType.Data
+        (pack, PackBlob(target, tpe, offset, length))
+      }
+
+      val data = Vector.fill(1000)(randomPackBlob())
+      val indexed = data.groupBy(_._2.id).view.mapValues(_.head).toMap
+      val tmpFile = File.createTempFile("index", "idx", new File("/tmp"))
+      tmpFile.deleteOnExit()
+      Index.writeIndexFile(tmpFile, indexed)
+      val index = Index.load(tmpFile)
+
+      indexed.keys.foreach { k =>
+        index.lookup(k) shouldEqual indexed(k)
+      }
+    }
+  }
+}
