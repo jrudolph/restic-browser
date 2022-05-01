@@ -56,6 +56,9 @@ object ResticReaderMain extends App {
       allEntries.toMap
     }
 
+  type PackIndexEntry = (Hash, PackBlob)
+  implicit val indexEntrySerializer = PackBlobSerializer
+
   if (!indexFile.exists()) {
     val idx = benchSync("loadIndex")(Await.result(loadIndex(), 30.seconds))
     benchSync("writeIndex")(Index.writeIndexFile(indexFile, idx))
@@ -73,7 +76,7 @@ object ResticReaderMain extends App {
     //Thread.sleep(100000)
   }*/
 
-  lazy val index2: Future[Index] = Future.successful(Index.load(indexFile))
+  lazy val index2: Future[Index[PackIndexEntry]] = Future.successful(Index.load(indexFile))
 
   def loadTree(id: Hash): Future[TreeBlob] =
     for {
@@ -156,7 +159,6 @@ object ResticReaderMain extends App {
     }
 
   index2.flatMap { i =>
-    //i.lookup(Hash("c0d1017cfad5bd8ea15694a32d2858c62c2373c4370a5f9ebb9fcdd40940bd07"))
     println("Loading all trees")
     val allTrees =
       i.allKeys
@@ -176,6 +178,12 @@ object ResticReaderMain extends App {
   }.onComplete {
     case Success(refs) =>
       println(s"Found ${refs.size} backrefs")
+      println("sorting...")
+      val sorted = benchSync("sorting")(refs.sortBy(_._1))
+      println("... done!")
+      println("grouping")
+      val grouped = benchSync("grouping")(refs.groupBy(_._1))
+      println("done")
   }
 
   //  {

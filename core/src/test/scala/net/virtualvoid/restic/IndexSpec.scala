@@ -9,6 +9,7 @@ import scala.util.Random
 class IndexSpec extends AnyFreeSpec with Matchers {
   "Index should" - {
     "work for pack index" in {
+      implicit val indexEntrySerializer = PackBlobSerializer
       val random = new Random
       def randomPackBlob(): (Hash, PackBlob) = {
         val target = Hash.unsafe(random.nextBytes(32))
@@ -19,7 +20,7 @@ class IndexSpec extends AnyFreeSpec with Matchers {
         (pack, PackBlob(target, tpe, offset, length))
       }
 
-      val data = Vector.fill(1000)(randomPackBlob())
+      val data = Vector.fill(10000)(randomPackBlob())
       val indexed = data.groupBy(_._2.id).view.mapValues(_.head).toMap
       val tmpFile = File.createTempFile("index", "idx", new File("/tmp"))
       tmpFile.deleteOnExit()

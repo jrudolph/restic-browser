@@ -89,6 +89,9 @@ class ResticReader(
   def loadIndex(file: File): Future[IndexFile] =
     readJson[IndexFile](file)
 
+  def loadSnapshot(file: File): Future[Snapshot] =
+    readJson[Snapshot](file)
+
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length)
       .map(data => new String(data, "utf8").parseJson.convertTo[T])(cpuBoundExecutor)

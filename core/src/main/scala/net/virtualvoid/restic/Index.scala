@@ -6,44 +6,60 @@ import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import scala.annotation.tailrec
 
-trait Index {
-  def lookup(blobId: Hash): (Hash, PackBlob)
+trait Writer {
+  def uint32le(value: Int): Unit
+  def hash(hash: Hash): Unit
+}
+trait Reader {
+  def uint32le(): Int
+  def hash(): Hash
+}
 
-  def find(blobId: Hash): (Int, Int)
+trait Serializer[T] {
+  def entrySize: Int
+
+  def write(id: Hash, t: T, writer: Writer): Unit
+  def read(id: Hash, reader: Reader): T
+}
+
+trait Index[T] {
+  def lookup(id: Hash): T
+
+  def find(id: Hash): (Int, Int)
   def allKeys: IndexedSeq[Hash]
 }
 
 object Index {
-  def writeIndexFile(indexFile: File, index: Map[Hash, (Hash, PackBlob)]): Unit = {
-    val keys = index.keys.toVector.sorted
+  def writeIndexFile[T: Serializer](indexFile: File, data: Iterable[(Hash, T)]): Unit = {
+    val serializer = implicitly[Serializer[T]]
     val fos = new BufferedOutputStream(new FileOutputStream(indexFile), 1000000)
 
-    def uint32le(value: Int): Unit = {
-      fos.write(value)
-      fos.write(value >> 8)
-      fos.write(value >> 16)
-      fos.write(value >> 24)
-    }
-    def hash(hash: Hash): Unit = {
-      require(hash.bytes.length == 32)
-      fos.write(hash.bytes)
+    val writer = new Writer {
+      def uint32le(value: Int): Unit = {
+        fos.write(value)
+        fos.write(value >> 8)
+        fos.write(value >> 16)
+        fos.write(value >> 24)
+      }
+
+      def hash(hash: Hash): Unit = {
+        require(hash.bytes.length == 32)
+        fos.write(hash.bytes)
+      }
     }
 
-    keys.foreach { blobId =>
-      val (packId, packBlob) = index(blobId)
-      hash(blobId)
-      val isTree = if (packBlob.isTree) 1 else 0
-      require(packBlob.offset <= Int.MaxValue)
-      hash(packId)
-      uint32le(packBlob.offset.toInt | (isTree << 31))
-      uint32le(packBlob.length)
+    data.toVector.sortBy(_._1).foreach {
+      case (id, value) =>
+        writer.hash(id)
+        serializer.write(id, value, writer)
     }
     fos.close()
   }
 
-  def load(indexFile: File): Index = {
+  def load[T: Serializer](indexFile: File): Index[T] = {
+    val serializer = implicitly[Serializer[T]]
     val HeaderSize = 0
-    val EntrySize = 72 /* 2 * 32 + 4 + 4 */
+    val EntrySize = 32 /* hash size */ + serializer.entrySize
 
     val file = FileChannel.open(indexFile.toPath)
     val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
@@ -55,7 +71,7 @@ object Index {
 
     def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
 
-    new Index {
+    new Index[T] {
       override def allKeys: IndexedSeq[Hash] = new IndexedSeq[Hash] {
         override def length: Int = numEntries
 
@@ -69,31 +85,32 @@ object Index {
         }
       }
 
-      override def lookup(blobId: Hash): (Hash, PackBlob) = {
-        def entryAt(idx: Int, step: Int): (Hash, PackBlob) = {
+      override def lookup(id: Hash): T = {
+        def entryAt(idx: Int, step: Int): T = {
           val targetBaseOffset = idx * EntrySize
-          val targetPackHashBytes = {
-            val dst = new Array[Byte](32)
-            indexBuffer.asReadOnlyBuffer.position(targetBaseOffset + 32).get(dst)
-            dst
-          }
-          val targetPackHash = Hash.unsafe(targetPackHashBytes)
-          val offsetAndType = intBuffer.get((targetBaseOffset + 64) >> 2)
-          val length = intBuffer.get((targetBaseOffset + 68) >> 2)
-          val offset = offsetAndType & 0x7fffffff
-          val tpe = if ((offsetAndType & 0x80000000) != 0) BlobType.Tree else BlobType.Data
+          val reader = new Reader {
+            val buffer = indexBuffer.asReadOnlyBuffer().position(targetBaseOffset + 32)
 
-          val res = (targetPackHash, PackBlob(blobId, tpe, offset, length))
-          //println(f"[${blobId.take(15)}] step: $step%2d   at: $idx%8d found: $res")
-          res
+            override def uint32le(): Int =
+              ((buffer.get() & 0xff)) |
+                ((buffer.get() & 0xff) << 8) |
+                ((buffer.get() & 0xff) << 16) |
+                ((buffer.get() & 0xff) << 24)
+            override def hash(): Hash = {
+              val dst = new Array[Byte](32)
+              buffer.get(dst)
+              Hash.unsafe(dst)
+            }
+          }
+          serializer.read(id, reader)
         }
 
-        val (idx, step) = find(blobId)
+        val (idx, step) = find(id)
         entryAt(idx, step)
       }
 
-      def find(blobId: Hash): (Int, Int) = {
-        val targetKey = blobId.prefix60AsLong
+      def find(id: Hash): (Int, Int) = {
+        val targetKey = id.prefix60AsLong
 
         def interpolate(left: Int, right: Int): Int = {
           val leftKey = keyAt(left)
@@ -107,7 +124,7 @@ object Index {
           val guessKey = keyAt(guess)
           //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
           if (guessKey == targetKey) (guess, step)
-          else if (leftIndex > rightIndex) throw new NoSuchElementException(blobId.toString)
+          else if (leftIndex > rightIndex) throw new NoSuchElementException(id.toString)
           else { // interpolation step
             val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
             val newRight = if (targetKey < guessKey) guess - 1 else rightIndex

@@ -2,7 +2,7 @@ package net.virtualvoid.restic.web
 
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
-import net.virtualvoid.restic.{ Hash, Index, ResticReader, TreeBlob }
+import net.virtualvoid.restic.{ Hash, Index, PackBlob, PackBlobSerializer, ResticReader, TreeBlob }
 
 import java.io.File
 import scala.concurrent.Future
@@ -24,7 +24,7 @@ object ResticBrowserMain extends App {
 
   val app: ResticApp = new ResticApp {
     val reader: ResticReader = _reader
-    val index: Index = Index.load(indexFile)
+    val index: Index[(Hash, PackBlob)] = Index.load(indexFile)(PackBlobSerializer)
 
     override def loadTree(hash: Hash): Future[TreeBlob] = {
       val (p, b) = index.lookup(hash)
