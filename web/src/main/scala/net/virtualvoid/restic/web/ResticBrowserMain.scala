@@ -22,16 +22,7 @@ object ResticBrowserMain extends App {
   val _reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
   val indexFile = new File("../index.out")
 
-  val app: ResticApp = new ResticApp {
-    val reader: ResticReader = _reader
-    val index: Index[PackEntry] = Index.load(indexFile)(PackBlobSerializer)
-
-    override def loadTree(hash: Hash): Future[TreeBlob] =
-      reader.loadTree(index.lookup(hash))
-
-    override def loadBlob(hash: Hash): Future[Array[Byte]] =
-      reader.loadBlob(index.lookup(hash))
-  }
+  val app = ResticApp(indexFile, _reader)
 
   val binding =
     Http().newServerAt("localhost", 8080)

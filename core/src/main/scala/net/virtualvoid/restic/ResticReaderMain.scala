@@ -184,6 +184,8 @@ object ResticReaderMain extends App {
       println("grouping")
       val grouped = benchSync("grouping")(refs.groupBy(_._1))
       println("done")
+    case Failure(ex) =>
+      ex.printStackTrace()
   }
 
   //  {
