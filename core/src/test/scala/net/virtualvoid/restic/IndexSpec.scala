@@ -31,5 +31,7 @@ class IndexSpec extends AnyFreeSpec with Matchers {
         index.lookup(k) shouldEqual indexed(k)
       }
     }
+    "handle conflicts after first 60 bits of hash" in pending
+    "support returning more than one match" in pending
   }
 }
