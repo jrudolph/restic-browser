@@ -107,7 +107,7 @@ object Index {
           val guessKey = keyAt(guess)
           //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
           if (guessKey == targetKey) (guess, step)
-          else if (leftIndex == rightIndex) throw new IllegalStateException
+          else if (leftIndex > rightIndex) throw new NoSuchElementException(blobId.toString)
           else { // interpolation step
             val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
             val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
