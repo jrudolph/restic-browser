@@ -11,17 +11,17 @@ class IndexSpec extends AnyFreeSpec with Matchers {
     "work for pack index" in {
       implicit val indexEntrySerializer = PackBlobSerializer
       val random = new Random
-      def randomPackBlob(): (Hash, PackBlob) = {
+      def randomPackEntry(): PackEntry = {
         val target = Hash.unsafe(random.nextBytes(32))
         val pack = Hash.unsafe(random.nextBytes(32))
         val offset = random.nextInt(Int.MaxValue)
         val length = random.nextInt(Int.MaxValue)
         val tpe = if (random.nextBoolean()) BlobType.Tree else BlobType.Data
-        (pack, PackBlob(target, tpe, offset, length))
+        PackEntry(pack, target, tpe, offset, length)
       }
 
-      val data = Vector.fill(10000)(randomPackBlob())
-      val indexed = data.groupBy(_._2.id).view.mapValues(_.head).toMap
+      val data = Vector.fill(10000)(randomPackEntry())
+      val indexed = data.groupBy(_.id).view.mapValues(_.head).toMap
       val tmpFile = File.createTempFile("index", "idx", new File("/tmp"))
       tmpFile.deleteOnExit()
       Index.writeIndexFile(tmpFile, indexed)

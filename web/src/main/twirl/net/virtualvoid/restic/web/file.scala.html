@@ -12,12 +12,12 @@
 <h3>Contents (@{leaf.content.size} parts)</h3>
 <table>
     <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th></tr>
-@for(b <- leaf.content; (pack, blob) = app.index.lookup(b)) {
+@for(b <- leaf.content; entry = app.index.lookup(b)) {
     <tr>
         <td class="hash">@{b.toString.take(16)}</td>
-        <td class="hash">@{pack.toString.take(16)}</td>
-        <td class="num-cell">@{blob.offset}</td>
-        <td class="num-cell">@{blob.length}</td>
+        <td class="hash">@{entry.packId.toString.take(16)}</td>
+        <td class="num-cell">@{entry.offset}</td>
+        <td class="num-cell">@{entry.length}</td>
     </tr>
 }
 </table>

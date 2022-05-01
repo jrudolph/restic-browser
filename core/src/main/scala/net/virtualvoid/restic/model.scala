@@ -186,3 +186,9 @@ object Snapshot {
   import spray.json.DefaultJsonProtocol._
   implicit val snapshotFormat = jsonFormat10(Snapshot.apply _)
 }
+
+// for use in index
+case class PackEntry(packId: Hash, id: Hash, `type`: BlobType, offset: Long, length: Int) {
+  def isTree: Boolean = `type` == BlobType.Tree
+  def isData: Boolean = `type` == BlobType.Data
+}

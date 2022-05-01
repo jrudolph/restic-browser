@@ -40,23 +40,26 @@ object ResticReaderMain extends App {
     res.mkdirs()
     res
   }
-  val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
+  val reader = new ResticReader(repoDir, backingDir, cacheDir,
+    system.dispatcher,
+    system.dispatcher
+  //system.dispatchers.lookup("blocking-dispatcher")
+  )
   val indexFile = new File("../index.out")
 
   //val indexFiles = reader.allFiles(indexDir)
   //println(indexFiles.size)
   //reader.readJson[TreeBlob](new File(dataFile), 0, 419).onComplete(println)
 
-  def loadIndex(): Future[Map[Hash, (Hash, PackBlob)]] =
+  def loadIndex(): Future[Map[Hash, PackEntry]] =
     Future.traverse(reader.allFiles(reader.indexDir))(f => reader.loadIndex(f).map(Hash(f.getName) -> _)).map { indices =>
       val allSuperseded = indices.flatMap(_._2.realSupersedes).toSet
       val withoutSuperseded = indices.toMap -- allSuperseded
       println(s"${allSuperseded.size} indices were superseded, ignored ${indices.size - withoutSuperseded.size} superseded index files")
-      val allEntries = withoutSuperseded.flatMap(_._2.packs.flatMap(p => p.blobs.map(b => b.id -> (p.id, b))))
-      allEntries.toMap
+      val allEntries = withoutSuperseded.flatMap(_._2.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length))))
+      allEntries
     }
 
-  type PackIndexEntry = (Hash, PackBlob)
   implicit val indexEntrySerializer = PackBlobSerializer
 
   if (!indexFile.exists()) {
@@ -76,13 +79,12 @@ object ResticReaderMain extends App {
     //Thread.sleep(100000)
   }*/
 
-  lazy val index2: Future[Index[PackIndexEntry]] = Future.successful(Index.load(indexFile))
+  lazy val index2: Future[Index[PackEntry]] = Future.successful(Index.load(indexFile))
 
   def loadTree(id: Hash): Future[TreeBlob] =
     for {
       i <- index2
-      (p, b) = i.lookup(id)
-      tree <- reader.loadTree(p, b)
+      tree <- reader.loadTree(i.lookup(id))
     } yield tree
 
   /*lazy val allTrees: Future[Seq[Hash]] =
@@ -163,12 +165,10 @@ object ResticReaderMain extends App {
     val allTrees =
       i.allKeys
         .map(i.lookup)
-        .filter(_._2.isTree).toVector
+        .filter(_.isTree).toVector
     println(s"Loaded ${allTrees.size} trees")
     Source(allTrees)
-      .mapAsync(1024) {
-        case (h, p) => treeBackReferences(p.id)
-      }
+      .mapAsync(1024) { e => treeBackReferences(e.id) }
       .mapConcat(identity)
       .runWith(Sink.seq)
 

@@ -79,10 +79,13 @@ class ResticReader(
       }
     }
   }
-
+  def loadTree(packEntry: PackEntry): Future[TreeBlob] =
+    readJson[TreeBlob](packFile(packEntry.packId), packEntry.offset, packEntry.length)
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
     readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
 
+  def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
+    readBlobFile(packFile(packEntry.packId), packEntry.offset, packEntry.length)
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
     readBlobFile(packFile(pack), blob.offset, blob.length)
 
