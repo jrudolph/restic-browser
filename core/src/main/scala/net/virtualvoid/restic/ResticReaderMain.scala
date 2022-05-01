@@ -137,6 +137,47 @@ object ResticReaderMain extends App {
   }
   def benchSync[T](desc: String)(f: => T): T = bench[T](desc)(Future.successful(f)).value.get.get
 
+  def snapshotStats: Unit =
+    Future.traverse(reader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
+      .foreach { snaps =>
+        snaps.toVector.sortBy(_._2.time).foreach { s =>
+          println(s._1, s._2.time, s._2.hostname, s._2.paths, s._2.tags)
+        }
+        println(s"Found ${snaps.size} snapshots")
+      }
+
+  def treeBackReferences(tree: Hash): Future[Vector[(Hash, TreeReference)]] =
+    loadTree(tree).map { treeBlob =>
+      treeBlob.nodes.flatMap {
+        case b: TreeBranch => Vector(b.subtree -> TreeReference(tree, b))
+        case l: TreeLeaf   => l.content.map(c => c -> TreeReference(tree, l))
+        case _             => Nil
+      }
+    }
+
+  index2.flatMap { i =>
+    //i.lookup(Hash("c0d1017cfad5bd8ea15694a32d2858c62c2373c4370a5f9ebb9fcdd40940bd07"))
+    println("Loading all trees")
+    val allTrees =
+      i.allKeys
+        .map(i.lookup)
+        .filter(_._2.isTree).toVector
+    println(s"Loaded ${allTrees.size} trees")
+    Source(allTrees)
+      .mapAsync(1024) {
+        case (h, p) => treeBackReferences(p.id)
+      }
+      .mapConcat(identity)
+      .runWith(Sink.seq)
+
+    /*Future.traverse(allTrees) {
+      case (h, _) => treeBackReferences(h)
+    }.map(_.flatten)*/
+  }.onComplete {
+    case Success(refs) =>
+      println(s"Found ${refs.size} backrefs")
+  }
+
   //  {
   //    //println(s"walking ${node.name}")
   //    node match {
@@ -160,7 +201,7 @@ object ResticReaderMain extends App {
         .onComplete(println)
     }*/
 
-  reverseReferences(Hash("a5b1b14e1b87f8e4804604065179d8edfd0815752b386b18de8660d099856d70"), Nil)
+  /*reverseReferences(Hash("a5b1b14e1b87f8e4804604065179d8edfd0815752b386b18de8660d099856d70"), Nil)
     .onComplete {
       case Success(v) =>
         println(s"Got ${v.size} entries")
@@ -178,7 +219,7 @@ object ResticReaderMain extends App {
         system.terminate()
       case Failure(ex) =>
         ex.printStackTrace()
-    }
+    }*/
 
   /*loadTree("5ea8baa28b12c186a50d13a88c902b98063339cb9fb1227a59e9376d72f98a8a")
     .map { t =>
