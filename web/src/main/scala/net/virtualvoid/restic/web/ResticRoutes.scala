@@ -6,7 +6,7 @@ import akka.http.scaladsl.server.Route
 
 import scala.concurrent.Future
 
-class ResticRoutes(app: ResticApp) {
+class ResticRoutes(reader: ResticReader) {
   import TwirlSupport._
 
   lazy val main = concat(
@@ -20,20 +20,22 @@ class ResticRoutes(app: ResticApp) {
         concat(
           pathEnd {
             val hash = Hash(h)
-            val tF = app.loadTree(hash)
+            val tF = reader.loadTree(hash)
             onSuccess(tF) { t =>
               complete(html.tree(hash, t))
             }
           },
           path(Segment) { fileName =>
             val hash = Hash(h)
-            val tF = app.loadTree(hash)
+            val tF = reader.loadTree(hash)
             onSuccess(tF) { t =>
               val node = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
-              val dataF = node.content.headOption.map(app.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
+              val dataF = node.content.headOption.map(reader.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
+              import reader.system.dispatcher
+              val entriesF = Future.traverse(node.content)(c => reader.packIndex.map(_.lookup(c)))
 
-              onSuccess(dataF) { data =>
-                complete(html.file(hash, fileName, node, printBytes(data), app))
+              (onSuccess(dataF) & onSuccess(entriesF)) { (data, entries) =>
+                complete(html.file(hash, fileName, node, printBytes(data), entries))
               }
             }
           }

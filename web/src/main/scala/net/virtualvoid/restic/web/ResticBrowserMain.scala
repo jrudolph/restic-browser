@@ -19,14 +19,11 @@ object ResticBrowserMain extends App {
     res.mkdirs()
     res
   }
-  val _reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
-  val indexFile = new File("../index.out")
-
-  val app = ResticApp(indexFile, _reader)
+  val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
 
   val binding =
     Http().newServerAt("localhost", 8080)
-      .bind(new ResticRoutes(app).main)
+      .bind(new ResticRoutes(reader).main)
   binding.onComplete { res =>
     println(s"Binding now $res")
   }

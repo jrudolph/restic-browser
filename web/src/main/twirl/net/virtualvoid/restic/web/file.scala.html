@@ -1,6 +1,6 @@
 @import net.virtualvoid.restic._
 
-@(hash: Hash, name: String, leaf: TreeLeaf, hexDump: String, app: ResticApp)
+@(hash: Hash, name: String, leaf: TreeLeaf, hexDump: String, entries: Seq[PackEntry])
 
 <h3>Meta</h3>
 <table>
@@ -12,9 +12,9 @@
 <h3>Contents (@{leaf.content.size} parts)</h3>
 <table>
     <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th></tr>
-@for(b <- leaf.content; entry = app.index.lookup(b)) {
+@for(entry <- entries) {
     <tr>
-        <td class="hash">@{b.toString.take(16)}</td>
+        <td class="hash">@{entry.id.toString.take(16)}</td>
         <td class="hash">@{entry.packId.toString.take(16)}</td>
         <td class="num-cell">@{entry.offset}</td>
         <td class="num-cell">@{entry.length}</td>

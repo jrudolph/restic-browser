@@ -1,12 +1,15 @@
 package net.virtualvoid.restic
 
+import akka.actor.ActorSystem
+import akka.stream.scaladsl.Source
+import net.virtualvoid.restic.ResticReaderMain.reader
 import spray.json._
 
 import java.io.{ File, FileInputStream }
-import java.nio.{ ByteBuffer, MappedByteBuffer }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
+import java.nio.{ ByteBuffer, MappedByteBuffer }
 import javax.crypto.Cipher
 import javax.crypto.spec.{ IvParameterSpec, SecretKeySpec }
 import scala.collection.immutable
@@ -15,9 +18,31 @@ import scala.concurrent.{ ExecutionContext, Future }
 class ResticReader(
     repoDir:          File,
     backingDir:       File,
-    cacheDir:         File,
+    cacheBaseDir:     File,
     cpuBoundExecutor: ExecutionContext,
-    blockingExecutor: ExecutionContext) {
+    blockingExecutor: ExecutionContext)(implicit val system: ActorSystem) {
+  import system.dispatcher
+
+  val repoId = repoDir.getName
+  val cacheDir = {
+    val res = new File(cacheBaseDir, repoId)
+    res.mkdirs()
+    res
+  }
+  val packIndexFile = new File(cacheDir, "pack.idx")
+
+  private implicit val indexEntrySerializer = PackBlobSerializer
+  lazy val packIndex: Future[Index[PackEntry]] =
+    if (packIndexFile.exists()) Future.successful(Index.load(packIndexFile))
+    else Index.createIndex(packIndexFile, allIndexEntries)
+
+  private def allIndexEntries: Source[(Hash, PackEntry), Any] =
+    Source(reader.allFiles(reader.indexDir))
+      .mapAsync(16)(f => reader.loadIndex(f))
+      .mapConcat { packIndex =>
+        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
+      }
+
   val secret = {
     val fis = new FileInputStream("../secret")
     val res = new Array[Byte](32)
@@ -73,17 +98,25 @@ class ResticReader(
         val backing = new File(backingDir, "data/" + path).resolved
         if (backingDir.exists()) {
           cached.getParentFile.mkdirs()
-          Files.copy(backing.toPath, cached.toPath)
+          val tmpFile = File.createTempFile(cached.getName.take(20) + "-", ".tmp", cached.getParentFile)
+          tmpFile.delete()
+          Files.copy(backing.toPath, tmpFile.toPath)
+          tmpFile.renameTo(cached)
           cached
         } else throw new RuntimeException(s"File missing in backing dir: $backing")
       }
     }
   }
+
+  def loadTree(id: Hash): Future[TreeBlob] =
+    packIndex.flatMap(i => loadTree(i.lookup(id)))
   def loadTree(packEntry: PackEntry): Future[TreeBlob] =
     readJson[TreeBlob](packFile(packEntry.packId), packEntry.offset, packEntry.length)
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
     readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
 
+  def loadBlob(id: Hash): Future[Array[Byte]] =
+    packIndex.flatMap(i => loadBlob(i.lookup(id)))
   def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
     readBlobFile(packFile(packEntry.packId), packEntry.offset, packEntry.length)
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
