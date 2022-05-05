@@ -28,6 +28,7 @@ trait Serializer[T] {
 
 trait Index[T] {
   def lookup(id: Hash): T
+  def lookupAll(id: Hash): Seq[T]
 
   def find(id: Hash): (Int, Int)
   def allKeys: IndexedSeq[Hash]
@@ -202,28 +203,42 @@ object Index {
         }
       }
 
-      override def lookup(id: Hash): T = {
-        def entryAt(idx: Int, step: Int): T = {
-          val targetBaseOffset = idx * EntrySize
-          val reader = new Reader {
-            val buffer = indexBuffer.asReadOnlyBuffer().position(targetBaseOffset + 32)
+      private def entryAt(id: Hash, idx: Int, step: Int): T = {
+        val targetBaseOffset = idx * EntrySize
+        val reader = new Reader {
+          val buffer = indexBuffer.asReadOnlyBuffer().position(targetBaseOffset + 32)
 
-            override def uint32le(): Int =
-              ((buffer.get() & 0xff)) |
-                ((buffer.get() & 0xff) << 8) |
-                ((buffer.get() & 0xff) << 16) |
-                ((buffer.get() & 0xff) << 24)
-            override def hash(): Hash = {
-              val dst = new Array[Byte](32)
-              buffer.get(dst)
-              Hash.unsafe(dst)
-            }
+          override def uint32le(): Int =
+            ((buffer.get() & 0xff)) |
+              ((buffer.get() & 0xff) << 8) |
+              ((buffer.get() & 0xff) << 16) |
+              ((buffer.get() & 0xff) << 24)
+          override def hash(): Hash = {
+            val dst = new Array[Byte](32)
+            buffer.get(dst)
+            Hash.unsafe(dst)
           }
-          serializer.read(id, reader)
         }
+        serializer.read(id, reader)
+      }
 
+      override def lookupAll(id: Hash): Seq[T] = try {
         val (idx, step) = find(id)
-        entryAt(idx, step)
+        val targetKey = id.prefix60AsLong
+        @tailrec def it(at: Int, step: Int): Int =
+          if (at >= 0 && at < numEntries && keyAt(at) == targetKey) it(at + step, step)
+          else at - step
+
+        val first = it(idx, -1)
+        val last = it(idx, +1)
+        (first to last).map(entryAt(id, _, step))
+      } catch {
+        case _: NoSuchElementException => Nil
+      }
+
+      override def lookup(id: Hash): T = {
+        val (idx, step) = find(id)
+        entryAt(id, idx, step)
       }
 
       def find(id: Hash): (Int, Int) = {
