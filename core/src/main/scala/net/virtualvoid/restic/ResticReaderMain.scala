@@ -5,6 +5,9 @@ import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
 
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import scala.annotation.tailrec
 import scala.concurrent.{ Await, Future }
 import scala.concurrent.duration._
 import scala.util.{ Failure, Success }
@@ -34,18 +37,17 @@ object ResticReaderMain extends App {
   //val res = readBlobFile(new File(dataFile), 820)
   //val res = readJson[IndexFile](new File(indexFile))
   val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
+  val repoId = repoDir.getName
   val backingDir = new File("/tmp/restic-repo")
-  val cacheDir = {
-    val res = new File("../restic-cache")
-    res.mkdirs()
-    res
-  }
-  val reader = new ResticReader(repoDir, backingDir, cacheDir,
+  val cacheBaseDir = new File("../restic-cache")
+
+  val reader = new ResticReader(repoDir, backingDir, cacheBaseDir,
     system.dispatcher,
     system.dispatcher
   //system.dispatchers.lookup("blocking-dispatcher")
   )
-  val indexFile = new File("../index.out")
+
+  import reader.loadTree
 
   //val indexFiles = reader.allFiles(indexDir)
   //println(indexFiles.size)
@@ -59,14 +61,6 @@ object ResticReaderMain extends App {
       val allEntries = withoutSuperseded.flatMap(_._2.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length))))
       allEntries
     }*/
-  def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(reader.allFiles(reader.indexDir))
-      .mapAsync(128)(f => reader.loadIndex(f))
-      .mapConcat { packIndex =>
-        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
-      }
-
-  implicit val indexEntrySerializer = PackBlobSerializer
 
   //lazy val index = bench("loadIndex")(loadIndex())
   /*index.onComplete {
@@ -79,16 +73,6 @@ object ResticReaderMain extends App {
         benchSync("writeIndex")(writeIndexFile(res))
     //Thread.sleep(100000)
   }*/
-
-  lazy val index2: Future[Index[PackEntry]] =
-    if (indexFile.exists()) Future.successful(Index.load(indexFile))
-    else bench("writeIndex")(Index.createIndex(indexFile, allIndexEntries))
-
-  def loadTree(id: Hash): Future[TreeBlob] =
-    for {
-      i <- index2
-      tree <- reader.loadTree(i.lookup(id))
-    } yield tree
 
   /*lazy val allTrees: Future[Seq[Hash]] =
     index.map { i =>
@@ -107,12 +91,12 @@ object ResticReaderMain extends App {
 
   sealed trait Reference
   case class SnapshotReference(id: Hash) extends Reference
-  case class TreeReference(treeBlobId: Hash, node: TreeNode) extends Reference
+  case class TreeReference(treeBlobId: Hash, idx: Int, node: TreeNode) extends Reference
   case class BlobReference(id: Hash, referenceChain: Seq[Reference]) {
     def chainString: String = {
       def refString(ref: Reference): String = ref match {
-        case SnapshotReference(id)  => s"snap:${id.toString.take(10)}"
-        case TreeReference(_, node) => node.name
+        case SnapshotReference(id)     => s"snap:${id.toString.take(10)}"
+        case TreeReference(_, _, node) => node.name
       }
 
       referenceChain.reverse.map(refString).mkString("/")
@@ -123,14 +107,14 @@ object ResticReaderMain extends App {
       val subdirs = blob.nodes.collect { case b: TreeBranch => b }
 
       val leaves =
-        blob.nodes
+        blob.nodes.zipWithIndex
           .flatMap {
-            case node: TreeLeaf =>
-              node.content.map(c => BlobReference(c, TreeReference(treeId, node) :: chain))
+            case (node: TreeLeaf, idx) =>
+              node.content.map(c => BlobReference(c, TreeReference(treeId, idx, node) :: chain))
             case _ => Vector.empty
           }
 
-      Future.traverse(subdirs)(b => reverseReferences(b.subtree, TreeReference(treeId, b) :: chain)).map(_.flatten ++ leaves)
+      Future.traverse(subdirs)(b => reverseReferences(b.subtree, TreeReference(treeId, 0, b) :: chain)).map(_.flatten ++ leaves)
     }
 
   def bench[T](desc: String)(f: => Future[T]): Future[T] = {
@@ -156,37 +140,128 @@ object ResticReaderMain extends App {
 
   def treeBackReferences(tree: Hash): Future[Vector[(Hash, TreeReference)]] =
     loadTree(tree).map { treeBlob =>
-      treeBlob.nodes.flatMap {
-        case b: TreeBranch => Vector(b.subtree -> TreeReference(tree, b))
-        case l: TreeLeaf   => l.content.map(c => c -> TreeReference(tree, l))
-        case _             => Nil
+      treeBlob.nodes.zipWithIndex.flatMap {
+        case (b: TreeBranch, idx) => Vector(b.subtree -> TreeReference(tree, idx, b))
+        case (l: TreeLeaf, idx)   => l.content.map(c => c -> TreeReference(tree, idx, l))
+        case _                    => Nil
       }
     }
 
-  index2.flatMap { i =>
-    println("Loading all trees")
-    val allTrees =
-      i.allKeys
-        .map(i.lookup)
-        .filter(_.isTree).toVector
-    println(s"Loaded ${allTrees.size} trees")
-    Source(allTrees)
-      .mapAsync(1024) { e => treeBackReferences(e.id) }
-      .mapConcat(identity)
-      .runWith(Sink.seq)
+  val backrefIndexFile = new File(reader.cacheDir, "backrefs.idx")
+  implicit object TreeReferenceSerializer extends Serializer[TreeReference] {
+    override def entrySize: Int = 40
+
+    override def write(id: Hash, t: TreeReference, writer: Writer): Unit = {
+      writer.hash(t.treeBlobId)
+      writer.uint32le(t.idx)
+      writer.uint32le(0) // reserved to make size aligned
+    }
+    override def read(id: Hash, reader: Reader): TreeReference = {
+      val treeBlob = reader.hash()
+      val idx = reader.uint32le()
+      TreeReference(treeBlob, idx, null)
+    }
+  }
+
+  reader.packIndex.flatMap { i =>
+    if (!backrefIndexFile.exists()) {
+      /*println("Loading all trees")
+      val allTrees =
+        i.allKeys
+          .map(i.lookup)
+          .filter(_.isTree).toVector
+      println(s"Loaded ${allTrees.size} trees")*/
+      val treeSource =
+        Source(i.allKeys)
+          .filter(i.lookup(_).isTree)
+          .mapAsync(1024) { e => treeBackReferences(e) }
+          .async
+          .mapConcat(identity)
+
+      Index.createIndex(backrefIndexFile, treeSource)
+    } else Future.successful(Index.load[TreeReference](backrefIndexFile))
 
     /*Future.traverse(allTrees) {
       case (h, _) => treeBackReferences(h)
     }.map(_.flatten)*/
   }.onComplete {
-    case Success(refs) =>
+    case Success(idx) =>
+      /*idx.lookupAll(Hash("f5c40b8948370710e31763d4176aa3ec272390ed7140347081b5010fd27311d2"))
+        .foreach(println)*/
+      case class Chain(id: Hash, chain: List[TreeNode])
+
+      def lookupRef(t: TreeReference): Future[TreeNode] = loadTree(t.treeBlobId).map(_.nodes(t.idx))
+
+      def memoized[T, U](f: T => Future[U]): T => Future[U] = {
+        val cache = new ConcurrentHashMap[T, Future[U]]()
+
+        val hits = new AtomicLong()
+        val misses = new AtomicLong()
+
+        t => {
+          def report(): Unit = {
+            val hs = hits.get()
+            val ms = misses.get()
+            println(f"Hits: $hs%10d Misses: $ms%10d hit rate: ${hs.toFloat / (hs + ms)}%5.2f")
+          }
+
+          if (cache.containsKey(t)) {
+            if (hits.incrementAndGet() % 10000 == 0) report()
+          } else if (misses.incrementAndGet() % 10000 == 0) report()
+
+          cache.computeIfAbsent(t, t =>
+            Future {
+              f(t)
+            }.flatten
+          )
+        }
+      }
+
+      def findBackChainsInternal(id: Hash): Future[Seq[Chain]] = {
+        val parents = idx.lookupAll(id)
+        if (parents.isEmpty) Future.successful(Vector(Chain(id, Nil)))
+        else
+          Source(parents)
+            .mapAsync(16)(ref => lookupRef(ref).flatMap(n => findBackChains(ref.treeBlobId).map(_.map(x => x.copy(chain = n :: x.chain)))))
+            .mapConcat(identity)
+            .runWith(Sink.seq)
+      }
+      lazy val findBackChains = memoized(findBackChainsInternal)
+      /*def resolve(chain: Chain): Future[Seq[TreeNode]] =
+        Future.traverse(chain.chain)(t => loadTree(t.treeBlobId).map(_.nodes(t.idx)))*/
+
+      //val target = "c72413bcff23b206"
+      val target = "85ab6c163d43a17e"
+      val chains = findBackChains(Hash(target))
+      //println(chains.size)
+      //chains.foreach(println)
+      /*Source(chains)
+        .mapAsync(16)(resolve)
+        .runWith(Sink.seq)*/
+      chains
+        .onComplete {
+          case Success(chs) =>
+
+            def chainString(s: Seq[TreeNode]): String =
+              "/" + s.map {
+                case t: TreeBranch => t.name
+                case l: TreeLeaf   => s"${l.name}(${l.size}"
+              }.mkString("/")
+
+            chs.map(s => chainString(s.chain.reverse)).groupBy(identity).view.mapValues(_.size).toVector.sortBy(-_._2).foreach(println)
+
+            Thread.sleep(30000)
+            println("done")
+        }
+
+    /*
       println(s"Found ${refs.size} backrefs")
       println("sorting...")
       val sorted = benchSync("sorting")(refs.sortBy(_._1))
       println("... done!")
       println("grouping")
-      val grouped = benchSync("grouping")(refs.groupBy(_._1))
-      println("done")
+      val grouped = benchSync("grouping")(refs.groupBy(_._1))*/
+    //println("done")
     case Failure(ex) =>
       ex.printStackTrace()
   }
