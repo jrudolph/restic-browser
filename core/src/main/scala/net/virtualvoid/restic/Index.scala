@@ -3,7 +3,7 @@ package net.virtualvoid.restic
 import akka.stream.Materializer
 import akka.stream.scaladsl.Source
 
-import java.io.{BufferedOutputStream, File, FileOutputStream, OutputStream}
+import java.io.{ BufferedOutputStream, File, FileOutputStream, OutputStream }
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
@@ -67,7 +67,7 @@ object Index {
       val tmpDataFile = File.createTempFile(s".${indexFile.getName}-values", ".tmp", indexFile.getParentFile)
       tmpDataFile.deleteOnExit()
 
-      println(s"Stream data to tmp file ${tmpDataFile}")
+      println(s"[${indexFile.getName}] Streaming data to tmp file ${tmpDataFile}")
       val dataOut = new BufferedOutputStream(new FileOutputStream(tmpDataFile), 1000000)
       val dataWriter = osWriter(dataOut)
 
@@ -84,6 +84,7 @@ object Index {
     def storeIndex(tmpDataFile: File): Index[T] = {
       val HeaderSize = 0
       val EntrySize = 32 /* hash size */ + serializer.entrySize
+      require((serializer.entrySize & 0x07) == 0)
 
       val dataChannel = FileChannel.open(tmpDataFile.toPath)
       val buffer = dataChannel.map(MapMode.READ_ONLY, 0, tmpDataFile.length())
@@ -96,17 +97,16 @@ object Index {
       // round down to previous power of 2
       val bucketBits = math.max(1, 32 - Integer.numberOfLeadingZeros(numEntries) - 4)
       val buckets = 1 << bucketBits
-      println(s"Creating $buckets buckets ($bucketBits bits) for $numEntries entries")
+      println(s"[${indexFile.getName}] Sorting into $buckets buckets ($bucketBits bits) for $numEntries entries")
 
       // create histogram - size: ~ buckets bytes
-      val bucketHistogram = Array.fill[Byte](buckets)(0) // TODO: use one array for offsets + bucketHistogram
+      val bucketHistogram = Array.fill[Int](buckets)(0) // TODO: use one array for offsets + bucketHistogram
       (0 until numEntries).foreach { i =>
         val key = keyAt(i)
         val bucket = (key >>> (60 - bucketBits)).toInt
         val n = bucketHistogram(bucket)
         //println(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
-        require(n < Byte.MaxValue)
-        bucketHistogram(bucket) = (n + 1).toByte
+        bucketHistogram(bucket) = (n + 1)
       }
       // find cumulative offsets - size: ~ buckets * 4 bytes
       val offsets = bucketHistogram.scanLeft(0)(_ + _) // .dropRight(1) - right-most entry can be ignored
@@ -122,6 +122,8 @@ object Index {
       }
 
       // sort buckets
+      println(s"[${indexFile.getName}] Sort buckets");
+      //
       {
         var at = 0
         var bucket = 0
@@ -151,6 +153,8 @@ object Index {
           bucket += 1
         }
       }
+
+      println(s"[${indexFile.getName}] Creating final index")
 
       // Copy out entries in the right order
       val tmpIndexFile = File.createTempFile(s".${indexFile.getName}-indices", ".tmp", indexFile.getParentFile)
@@ -233,18 +237,21 @@ object Index {
 
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
-        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int): (Int, Int) = {
-          val guessKey = keyAt(guess)
-          //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
-          if (guessKey == targetKey) (guess, step)
-          else if (leftIndex > rightIndex) throw new NoSuchElementException(id.toString)
-          else { // interpolation step
-            val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
-            val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
+        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int): (Int, Int) =
+          if (step > 20)
+            throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
+          else {
+            val guessKey = keyAt(guess)
+            //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+            if (guessKey == targetKey) (guess, step)
+            else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
+            else { // interpolation step
+              val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
+              val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
 
-            rec(newLeft, newRight, interpolate(newLeft, newRight), step + 1)
+              rec(newLeft, newRight, interpolate(newLeft, newRight), step + 1)
+            }
           }
-        }
 
         //val firstGuess = numEntries / 2
         val firstGuess = interpolate(0, numEntries - 1)
