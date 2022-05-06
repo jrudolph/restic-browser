@@ -257,31 +257,6 @@ object ResticReaderMain extends App {
         }
       }
 
-      def memoized2[T, U](f: T => Future[U]): T => Future[U] = {
-        val cache = new ConcurrentHashMap[T, Future[U]]()
-
-        val hits = new AtomicLong()
-        val misses = new AtomicLong()
-
-        t => {
-          def report(): Unit = {
-            val hs = hits.get()
-            val ms = misses.get()
-            println(f"Hits: $hs%10d Misses: $ms%10d hit rate: ${hs.toFloat / (hs + ms)}%5.2f")
-          }
-
-          if (cache.containsKey(t)) {
-            if (hits.incrementAndGet() % 10000 == 0) report()
-          } else if (misses.incrementAndGet() % 10000 == 0) report()
-
-          cache.computeIfAbsent(t, t =>
-            Future {
-              f(t)
-            }.flatten
-          )
-        }
-      }
-
       def findBackChainsInternal(id: Hash): Future[Seq[Chain]] = {
         val parents = idx.lookupAll(id)
         if (parents.isEmpty) Future.successful(Vector(Chain(id, Nil)))
