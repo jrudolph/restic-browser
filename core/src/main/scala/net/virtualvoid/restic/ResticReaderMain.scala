@@ -2,6 +2,8 @@ package net.virtualvoid.restic
 
 import akka.NotUsed
 import akka.actor.ActorSystem
+import akka.http.caching.LfuCache
+import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
 import akka.stream.scaladsl.{ Sink, Source }
 import net.virtualvoid.restic.ResticReaderMain.reader
 
@@ -225,6 +227,27 @@ object ResticReaderMain extends App {
         }
 
       def memoized[T, U](f: T => Future[U]): T => Future[U] = {
+        val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
+
+        val hits = new AtomicLong()
+        val misses = new AtomicLong()
+
+        t => {
+          def report(): Unit = {
+            val hs = hits.get()
+            val ms = misses.get()
+            println(f"Hits: $hs%10d Misses: $ms%10d hit rate: ${hs.toFloat / (hs + ms)}%5.2f")
+          }
+
+          if (cache.get(t).isDefined) {
+            if (hits.incrementAndGet() % 10000 == 0) report()
+          } else if (misses.incrementAndGet() % 10000 == 0) report()
+
+          cache(t, () => f(t))
+        }
+      }
+
+      def memoized2[T, U](f: T => Future[U]): T => Future[U] = {
         val cache = new ConcurrentHashMap[T, Future[U]]()
 
         val hits = new AtomicLong()

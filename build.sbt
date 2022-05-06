@@ -18,6 +18,7 @@ lazy val core =
     .settings(
       libraryDependencies ++= Seq(
         "com.typesafe.akka" %% "akka-stream" % akkaV,
+        "com.typesafe.akka" %% "akka-http-caching" % akkaHttpV,
         "io.spray" %% "spray-json" % sprayJsonV,
         "org.scalatest" %% "scalatest" % scalaTestV % "test",
       )
