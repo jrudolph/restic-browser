@@ -226,6 +226,11 @@ object ResticReaderMain extends App {
           case s: SnapshotReference => Future.successful(SnapshotNode(s.id, snaps(s.id)))
         }
 
+      def memoizedStrict[T, U](f: T => U): T => U = {
+        val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
+        t => cache.get(t, () => f(t)).value.get.get
+      }
+
       def memoized[T, U](f: T => Future[U]): T => Future[U] = {
         val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
 
@@ -330,13 +335,56 @@ object ResticReaderMain extends App {
         }
 
         val fos = new FileOutputStream("report.log")
-        Source(packIdx.allKeys)
-          .filter(id => !packIdx.lookup(id).isTree)
-          //.take(100000)
-          .via(new Stats("blobs", "element", _ => 1))
-          .mapAsync(1024)(x => singleChain(x).map(_.map(x -> _)))
-          .mapConcat(identity)
-          .filter(_._2.chain.nonEmpty)
+        def originalChains: Source[(Hash, Chain), Any] =
+          Source(packIdx.allKeys)
+            .filter(id => !packIdx.lookup(id).isTree)
+            //.take(100000)
+            .via(new Stats("blobs", "element", _ => 1))
+            .mapAsync(1024)(x => singleChain(x).map(_.map(x -> _)))
+            .mapConcat(identity)
+            .filter(_._2.chain.nonEmpty)
+
+        val sizeOf: Hash => Int = memoizedStrict[Hash, Int] { h =>
+          idx.lookupAll(h).size
+        }
+
+        def collectChains(id: Hash, chain: List[ChainNode]): Future[Seq[(Hash, Chain)]] = {
+          sizeOf(id) match {
+            case 1 =>
+              reader.loadTree(id).flatMap { tree =>
+                Future.sequence {
+                  val blobs: Vector[Future[Seq[(Hash, Chain)]]] =
+                    Vector {
+                      Future.successful {
+                        tree.nodes.flatMap {
+                          case l: TreeLeaf =>
+                            l.content
+                              .filter(blobId => sizeOf(blobId) == 1)
+                              .map(b => b -> Chain(b, TreeChainNode(l) :: chain))
+                          case _ => Vector.empty
+                        }
+                      }
+                    }
+
+                  val trees =
+                    tree.nodes.collect {
+                      case b: TreeBranch =>
+                        collectChains(b.subtree, TreeChainNode(b) :: chain)
+                    }
+                  trees ++ blobs
+                }.map(_.flatten)
+              }
+            case _ => Future.successful(Vector.empty)
+          }
+        }
+
+        def fastChains: Source[(Hash, Chain), Any] =
+          Source(reader.allFiles(reader.snapshotDir))
+            .mapAsync(1024)(f => reader.loadSnapshot(f).map(s => SnapshotNode(Hash(f.getName), s)))
+            .mapAsync(1024)(snap => collectChains(snap.node.tree, snap :: Nil))
+            .mapConcat(identity)
+
+        fastChains
           .runForeach {
             case (hash, chain) =>
               def size(id: Hash): Long = packIdx.lookup(id).length
