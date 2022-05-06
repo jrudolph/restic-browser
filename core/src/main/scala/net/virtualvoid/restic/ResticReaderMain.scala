@@ -4,7 +4,7 @@ import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{ Sink, Source }
 
-import java.io.File
+import java.io.{ File, FileOutputStream }
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import scala.annotation.tailrec
@@ -174,7 +174,7 @@ object ResticReaderMain extends App {
       val treeSource =
         Source(i.allKeys)
           .filter(i.lookup(_).isTree)
-          .mapAsync(1024) { e => treeBackReferences(e) }
+          .mapAsync(1024)(treeBackReferences)
           .async
           .mapConcat(identity)
 
@@ -227,32 +227,78 @@ object ResticReaderMain extends App {
             .runWith(Sink.seq)
       }
       lazy val findBackChains = memoized(findBackChainsInternal)
-      /*def resolve(chain: Chain): Future[Seq[TreeNode]] =
-        Future.traverse(chain.chain)(t => loadTree(t.treeBlobId).map(_.nodes(t.idx)))*/
 
+      def chainString(s: Seq[TreeNode]): String =
+        "/" + s.map {
+          case t: TreeBranch => t.name
+          case l: TreeLeaf   => s"${l.name}(${l.size})"
+        }.mkString("/")
+
+      def findChainsForHash(target: Hash): Unit = {
+        val chains = findBackChains(target)
+        chains
+          .onComplete {
+            case Success(chs) =>
+              chs.map(s => chainString(s.chain.reverse)).groupBy(identity).view.mapValues(_.size).toVector.sortBy(-_._2).foreach(println)
+
+              Thread.sleep(30000)
+              println("done")
+          }
+      }
       //val target = "c72413bcff23b206"
-      val target = "85ab6c163d43a17e"
-      val chains = findBackChains(Hash(target))
-      //println(chains.size)
-      //chains.foreach(println)
-      /*Source(chains)
-        .mapAsync(16)(resolve)
-        .runWith(Sink.seq)*/
-      chains
-        .onComplete {
-          case Success(chs) =>
+      val target = "0004da4650044bcd"
+      findChainsForHash(Hash(target))
 
-            def chainString(s: Seq[TreeNode]): String =
-              "/" + s.map {
-                case t: TreeBranch => t.name
-                case l: TreeLeaf   => s"${l.name}(${l.size}"
-              }.mkString("/")
-
-            chs.map(s => chainString(s.chain.reverse)).groupBy(identity).view.mapValues(_.size).toVector.sortBy(-_._2).foreach(println)
-
-            Thread.sleep(30000)
-            println("done")
+      reader.packIndex.foreach { packIdx =>
+        lazy val singleChain = memoized(singleChainInternal)
+        def singleChainInternal(id: Hash): Future[Option[Chain]] = {
+          val parents = idx.lookupAll(id)
+          parents.size match {
+            case 0 => Future.successful(Some(Chain(id, Nil)))
+            case 1 =>
+              val ref = parents.head
+              lookupRef(ref).flatMap(n => singleChain(ref.treeBlobId).map(_.map(x => x.copy(chain = n :: x.chain))))
+            case _ => Future.successful(None)
+          }
         }
+
+        val fos = new FileOutputStream("report.log")
+        Source(packIdx.allKeys)
+          .filter(id => !packIdx.lookup(id).isTree)
+          //.take(100000)
+          .via(new Stats("blobs", "element", _ => 1))
+          .mapAsync(1024)(x => singleChain(x).map(_.map(x -> _)))
+          .mapConcat(identity)
+          .filter(_._2.chain.nonEmpty)
+          .runForeach {
+            case (hash, chain) =>
+              def size(id: Hash): Long = packIdx.lookup(id).length
+              def stack(chain: Chain): String =
+                chain.chain.reverse.map(_.name).mkString(";") + s";${hash.toString.take(16)}"
+              fos.write(f"${stack(chain)} ${size(hash)}%10d\n".getBytes)
+          }
+          .onComplete { res =>
+            println(s"Res: $res")
+            fos.close()
+          }
+        /*.runWith(Sink.seq)
+          .onComplete {
+            case Success(chains) =>
+              /*def size(chain: Seq[TreeNode]): Long = chain.headOption match {
+                case Some(l: TreeLeaf) => l.content
+                case _                 => 0
+              }*/
+              def size(id: Hash): Long = packIdx.lookup(id).length
+              chains
+                .map(x => x -> size(x._1))
+                .sortBy(-_._2)
+                .take(100)
+                .foreach {
+                  case (chain, size) => println(f"$size%12d ${chain._1} ${chainString(chain._2.chain.reverse)}")
+                }
+
+          }*/
+      }
 
     /*
       println(s"Found ${refs.size} backrefs")
