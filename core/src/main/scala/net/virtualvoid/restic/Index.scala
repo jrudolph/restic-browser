@@ -249,27 +249,32 @@ object Index {
           val rightKey = keyAt(right)
           left + ((targetKey - leftKey).toFloat * (right - left) / (rightKey - leftKey)).toInt
         }
+        //val firstGuess = numEntries / 2
+        val firstGuess = interpolate(0, numEntries - 1)
 
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
-        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int): (Int, Int) =
-          if (step > 500)
-            throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
-          else {
+        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int, trace: Boolean = false): (Int, Int) =
+          {
             val guessKey = keyAt(guess)
-            //println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+            if (trace) println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
             if (guessKey == targetKey) (guess, step)
             else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
-            else { // interpolation step
+            else if (step > 50) // 10 + log2(numEntries)
+              if (!trace) rec(0, numEntries - 1, firstGuess, 1, trace = true)
+              else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
+            else {
               val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
               val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
 
-              rec(newLeft, newRight, interpolate(newLeft, newRight), step + 1)
+              val nextGuess =
+                if (step < 10) interpolate(newLeft, newRight) // interpolation
+                else (newLeft + newRight) / 2 // binary search
+
+              rec(newLeft, newRight, nextGuess, step + 1, trace)
             }
           }
 
-        //val firstGuess = numEntries / 2
-        val firstGuess = interpolate(0, numEntries - 1)
         rec(0, numEntries - 1, firstGuess, 1)
       }
     }
