@@ -5,6 +5,7 @@ import akka.actor.ActorSystem
 import akka.http.caching.LfuCache
 import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
 import akka.stream.scaladsl.{ Sink, Source }
+import com.github.benmanes.caffeine.cache.Caffeine
 import net.virtualvoid.restic.ResticReaderMain.reader
 
 import java.io.{ File, FileOutputStream }
@@ -227,8 +228,12 @@ object ResticReaderMain extends App {
         }
 
       def memoizedStrict[T, U](f: T => U): T => U = {
-        val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
-        t => cache.get(t, () => f(t)).value.get.get
+        val cache =
+          Caffeine.newBuilder()
+            .maximumSize(50000)
+            .build[T, U]()
+
+        t => cache.get(t, t => f(t))
       }
 
       def memoized[T, U](f: T => Future[U]): T => Future[U] = {
@@ -307,14 +312,11 @@ object ResticReaderMain extends App {
           .onComplete {
             case Success(chs) =>
               chs.map(s => chainString(s.chain.reverse)).groupBy(identity).view.mapValues(_.size).toVector.sortBy(-_._2).foreach(println)
-
-              Thread.sleep(30000)
-              println("done")
           }
       }
       //val target = "c72413bcff23b206"
-      val target = "0004da4650044bcd"
-      findChainsForHash(Hash(target))
+      //val target = "0004da4650044bcd"
+      //findChainsForHash(Hash(target))
 
       reader.packIndex.foreach { packIdx =>
         lazy val singleChain = memoized(singleChainInternal)
@@ -344,37 +346,32 @@ object ResticReaderMain extends App {
             .mapConcat(identity)
             .filter(_._2.chain.nonEmpty)
 
-        val sizeOf: Hash => Int = memoizedStrict[Hash, Int] { h =>
-          idx.lookupAll(h).size
-        }
+        val onlyReferencedOnce: Hash => Boolean =
+          memoizedStrict[Hash, Boolean](h => idx.lookupAll(h).size == 1)
 
         def collectChains(id: Hash, chain: List[ChainNode]): Future[Seq[(Hash, Chain)]] = {
-          sizeOf(id) match {
-            case 1 =>
+          onlyReferencedOnce(id) match {
+            case true =>
               reader.loadTree(id).flatMap { tree =>
-                Future.sequence {
-                  val blobs: Vector[Future[Seq[(Hash, Chain)]]] =
-                    Vector {
-                      Future.successful {
-                        tree.nodes.flatMap {
-                          case l: TreeLeaf =>
-                            l.content
-                              .filter(blobId => sizeOf(blobId) == 1)
-                              .map(b => b -> Chain(b, TreeChainNode(l) :: chain))
-                          case _ => Vector.empty
-                        }
-                      }
-                    }
+                val blobs: Seq[(Hash, Chain)] =
+                  tree.nodes.flatMap {
+                    case l: TreeLeaf =>
+                      l.content
+                        .filter(blobId => onlyReferencedOnce(blobId))
+                        .map(b => b -> Chain(b, TreeChainNode(l) :: chain))
+                    case _ => Vector.empty
+                  }
 
+                Future.sequence {
                   val trees =
                     tree.nodes.collect {
                       case b: TreeBranch =>
                         collectChains(b.subtree, TreeChainNode(b) :: chain)
                     }
-                  trees ++ blobs
-                }.map(_.flatten)
+                  trees
+                }.map(_.flatten ++ blobs)
               }
-            case _ => Future.successful(Vector.empty)
+            case false => Future.successful(Vector.empty)
           }
         }
 
