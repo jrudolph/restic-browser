@@ -324,31 +324,28 @@ object ResticReaderMain extends App {
         val onlyReferencedOnce: Hash => Boolean =
           memoizedStrict[Hash, Boolean](h => idx.lookupAll(h).size == 1)
 
-        def collectChains(id: Hash, chain: List[ChainNode]): Future[Seq[(Hash, Chain)]] = {
-          onlyReferencedOnce(id) match {
-            case true =>
-              reader.loadTree(id).flatMap { tree =>
-                val blobs: Seq[(Hash, Chain)] =
-                  tree.nodes.flatMap {
-                    case l: TreeLeaf =>
-                      l.content
-                        .filter(blobId => onlyReferencedOnce(blobId))
-                        .map(b => b -> Chain(b, TreeChainNode(l) :: chain))
-                    case _ => Vector.empty
-                  }
+        def collectChains(id: Hash, chain: List[ChainNode]): Future[Seq[(Hash, Chain)]] =
+          if (onlyReferencedOnce(id))
+            reader.loadTree(id).flatMap { tree =>
+              val blobs: Seq[(Hash, Chain)] =
+                tree.nodes.flatMap {
+                  case l: TreeLeaf =>
+                    l.content
+                      .filter(onlyReferencedOnce)
+                      .map(b => b -> Chain(b, TreeChainNode(l) :: chain))
+                  case _ => Vector.empty
+                }
 
-                Future.sequence {
-                  val trees =
-                    tree.nodes.collect {
-                      case b: TreeBranch =>
-                        collectChains(b.subtree, TreeChainNode(b) :: chain)
-                    }
-                  trees
-                }.map(_.flatten ++ blobs)
-              }
-            case false => Future.successful(Vector.empty)
-          }
-        }
+              Future.sequence {
+                val trees =
+                  tree.nodes.collect {
+                    case b: TreeBranch =>
+                      collectChains(b.subtree, TreeChainNode(b) :: chain)
+                  }
+                trees
+              }.map(_.flatten ++ blobs)
+            }
+          else Future.successful(Vector.empty)
 
         def fastChains: Source[(Hash, Chain), Any] =
           Source(reader.allFiles(reader.snapshotDir))
