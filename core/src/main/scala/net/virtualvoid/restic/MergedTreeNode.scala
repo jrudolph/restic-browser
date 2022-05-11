@@ -4,9 +4,10 @@ import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
 import scala.concurrent.Future
 
 case class MergedTreeNode(
-    name:      String,
-    revisions: Seq[(TreeNode, Snapshot)]
+    name:            String,
+    nestedRevisions: Seq[(TreeNode, Seq[Snapshot])]
 ) {
+  def revisions: Seq[(TreeNode, Snapshot)] = nestedRevisions.flatMap { case (n, snaps) => snaps.map(n -> _) }
   def firstSeen: ZonedDateTime = revisions.map(_._2.time).min
   def firstSeenPeriod: String = convertToInterval(firstSeen)
   def lastSeen: ZonedDateTime = revisions.map(_._2.time).max
@@ -34,13 +35,13 @@ case class MergedTreeNode(
 object MergedTreeNode {
   def lookupBranch(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[Seq[MergedTreeNode]] = {
     import repo.system.dispatcher
-    def rec(path: List[String], roots: Seq[(Hash, Snapshot)]): Future[Seq[MergedTreeNode]] = path match {
+    def rec(path: List[String], roots: Seq[(Hash, Seq[Snapshot])]): Future[Seq[MergedTreeNode]] = path match {
       case Nil =>
         Future.traverse(roots) { case (tree, snap) => repo.loadTree(tree).map(_ -> snap) }
           .map { blobs =>
             blobs.flatMap {
-              case (blob, snap) =>
-                blob.nodes.map(_ -> snap)
+              case (blob, snaps) =>
+                blob.nodes.map(_ -> snaps)
             }
               .groupBy(_._1.name)
               .toVector
@@ -54,11 +55,11 @@ object MergedTreeNode {
             blobs.flatMap {
               case (blob, snap) =>
                 blob.nodes.collect { case b: TreeBranch if b.name == next => b.subtree -> snap }
-            }
+            }.groupBy(_._1).view.mapValues(_.flatMap(_._2)).toVector
           }
           .flatMap(newRoots => rec(rem, newRoots))
     }
 
-    rec(path.toList, snapshots.map(s => s.tree -> s))
+    rec(path.toList, snapshots.map(s => s.tree -> Seq(s)))
   }
 }
