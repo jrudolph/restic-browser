@@ -1,0 +1,22 @@
+@import net.virtualvoid.restic._
+
+@(snapshotInfos: Seq[web.SnapshotInfo], repo: ResticRepository)
+
+<h4>Restic repository @{repo.repoId} at @{repo.repoDir}</h4>
+
+<table>
+    <tr>
+        <th>Hostname</th>
+        <th>Paths</th>
+        <th>Tags</th>
+        <th>Number of Snapshots</th>
+    </tr>
+@for(snap <- snapshotInfos.sortBy(x => (-x.snapshots.size, x.host, x.paths.headOption))) {
+    <tr>
+        <td>@{snap.host}</td>
+        <td>@{snap.paths.mkString(", ")}</td>
+        <td>@{snap.tags.mkString(", ")}</td>
+        <td>@{snap.snapshots.size}</td>
+    </tr>
+}
+</table>

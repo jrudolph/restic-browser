@@ -2,7 +2,6 @@ package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.Source
-import net.virtualvoid.restic.ResticReaderMain.reader
 import spray.json._
 
 import java.io.File
@@ -60,7 +59,7 @@ object ResticRepository {
 }
 
 class ResticRepository(
-    repoDir:      File,
+    val repoDir:  File,
     masterKey:    MasterKey,
     cacheBaseDir: File)(implicit val system: ActorSystem) {
   import system.dispatcher
@@ -88,8 +87,8 @@ class ResticRepository(
     else Index.createIndex(packIndexFile, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(ResticRepository.allFiles(reader.indexDir))
-      .mapAsync(16)(f => reader.loadIndex(f))
+    Source(ResticRepository.allFiles(indexDir))
+      .mapAsync(16)(f => loadIndex(f))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
       }
@@ -163,6 +162,9 @@ class ResticRepository(
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length)
       .map(data => new String(data, "utf8").parseJson.convertTo[T])
+
+  def allSnapshots(): Future[Seq[Snapshot]] =
+    Future.traverse(ResticRepository.allFiles(snapshotDir).toVector)(loadSnapshot)
 
   val indexDir = new File(resticCacheDir, "index")
   val snapshotDir = new File(resticCacheDir, "snapshots")

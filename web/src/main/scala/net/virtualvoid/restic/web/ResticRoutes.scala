@@ -6,8 +6,11 @@ import akka.http.scaladsl.server.Route
 
 import scala.concurrent.Future
 
+case class SnapshotInfo(host: String, paths: Set[String], tags: Set[String], snapshots: Seq[Snapshot])
+
 class ResticRoutes(reader: ResticRepository) {
   import TwirlSupport._
+  import reader.system.dispatcher
 
   lazy val main = concat(
     routes,
@@ -16,31 +19,37 @@ class ResticRoutes(reader: ResticRepository) {
 
   lazy val routes =
     get {
-      pathPrefix("blob" / Segment) { h =>
-        concat(
-          pathEnd {
-            val hash = Hash(h)
-            val tF = reader.loadTree(hash)
-            onSuccess(tF) { t =>
-              complete(html.tree(hash, t))
-            }
-          },
-          path(Segment) { fileName =>
-            val hash = Hash(h)
-            val tF = reader.loadTree(hash)
-            onSuccess(tF) { t =>
-              val node = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
-              val dataF = node.content.headOption.map(reader.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
-              import reader.system.dispatcher
-              val entriesF = Future.traverse(node.content)(c => reader.packIndex.map(_.lookup(c)))
+      concat(
+        pathEndOrSingleSlash {
+          onSuccess(snapshotInfos) { infos =>
+            complete(html.home(infos, reader))
+          }
+        },
+        pathPrefix("blob" / Segment) { h =>
+          concat(
+            pathEnd {
+              val hash = Hash(h)
+              val tF = reader.loadTree(hash)
+              onSuccess(tF) { t =>
+                complete(html.tree(hash, t))
+              }
+            },
+            path(Segment) { fileName =>
+              val hash = Hash(h)
+              val tF = reader.loadTree(hash)
+              onSuccess(tF) { t =>
+                val node = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
+                val dataF = node.content.headOption.map(reader.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
+                import reader.system.dispatcher
+                val entriesF = Future.traverse(node.content)(c => reader.packIndex.map(_.lookup(c)))
 
-              (onSuccess(dataF) & onSuccess(entriesF)) { (data, entries) =>
-                complete(html.file(hash, fileName, node, printBytes(data), entries))
+                (onSuccess(dataF) & onSuccess(entriesF)) { (data, entries) =>
+                  complete(html.file(hash, fileName, node, printBytes(data), entries))
+                }
               }
             }
-          }
-        )
-      }
+          )
+        })
     }
 
   lazy val auxiliary: Route =
@@ -74,4 +83,14 @@ class ResticRoutes(reader: ResticRepository) {
   def asASCII(b: Byte): Char =
     if (b >= 0x20 && b < 0x7f) b.toChar
     else '.'
+
+  def snapshotInfos: Future[Seq[SnapshotInfo]] =
+    reader.allSnapshots()
+      .map { snaps =>
+        snaps.groupBy(s => (s.hostname, s.paths.toSet, s.tags.toSet))
+          .map {
+            case ((host, paths, tags), snaps) => SnapshotInfo(host, paths, tags, snaps)
+          }
+          .toVector
+      }
 }
