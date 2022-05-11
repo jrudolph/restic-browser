@@ -1,11 +1,29 @@
 package net.virtualvoid.restic
 
+import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
 import scala.concurrent.Future
 
 case class MergedTreeNode(
     name:      String,
     revisions: Seq[(TreeNode, Snapshot)]
-)
+) {
+  def firstSeen: ZonedDateTime = revisions.map(_._2.time).min
+  def firstSeenPeriod: String = convertToInterval(firstSeen)
+  def lastSeen: ZonedDateTime = revisions.map(_._2.time).max
+  def lastSeenPeriod: String = convertToInterval(lastSeen)
+
+  def isOlderThanDays(days: Int): Boolean = Duration.between(lastSeen.toInstant, Instant.now()).toDays > days
+
+  private def convertToInterval(dt: ZonedDateTime): String = {
+    val p = Period.between(dt.toLocalDate, LocalDate.now())
+    def str(short: String, what: Int): String =
+      if (what > 0) f"$what%2d$short" else ""
+    if (dt.toLocalDate == LocalDate.now()) "today"
+    else if (dt.toLocalDate == LocalDate.now().minusDays(1)) "yesterday"
+    else
+      Seq(str("y", p.getYears), str("m", p.getMonths), str("d", p.getDays)).filter(_.nonEmpty).mkString(" ") + " ago"
+  }
+}
 object MergedTreeNode {
   def lookupBranch(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[Seq[MergedTreeNode]] = {
     import repo.system.dispatcher

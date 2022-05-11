@@ -11,7 +11,7 @@ import net.virtualvoid.restic.ResticReaderMain.reader
 
 import java.io.{ File, FileOutputStream }
 import java.time.format.DateTimeFormatter
-import java.time.{ LocalDateTime, LocalTime }
+import java.time.{ LocalDateTime, LocalTime, ZoneOffset }
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import scala.annotation.tailrec
@@ -353,7 +353,7 @@ object ResticReaderMain extends App {
                   .map {
                     case t: TreeChainNode => t.tree.name
                     case s: SnapshotNode =>
-                      val dt = LocalDateTime.parse(s.node.time, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                      val dt = s.node.time
                       s"${dt.getYear};${dt.getMonth};${s.id.toString.take(16)}(${s.node.time})"
                   }
                   .mkString(";") + s";${hash.toString.take(16)}"

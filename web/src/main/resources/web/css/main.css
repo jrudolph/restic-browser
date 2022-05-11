@@ -2,3 +2,8 @@ body { font-family: mono; }
 
 td.num-cell { text-align: right; }
 .hash { font-family: mono; }
+
+tr.old td { color: #888; }
+tr.old td a { color: #888; }
+table.mergedtable td.text { text-align: left; }
+table.mergedtable td { padding-right: 8px; text-align: right; }

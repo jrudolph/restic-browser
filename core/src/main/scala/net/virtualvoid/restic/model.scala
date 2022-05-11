@@ -4,7 +4,10 @@ import com.lambdaworks.crypto.SCrypt
 import spray.json._
 
 import java.nio.ByteBuffer
+import java.time.format.DateTimeFormatter
+import java.time.{ Instant, ZonedDateTime }
 import java.util.Base64
+import java.util.Formatter.DateTime
 import javax.crypto.spec.SecretKeySpec
 import scala.annotation.tailrec
 import scala.util.Try
@@ -174,7 +177,7 @@ object IndexFile {
 }
 
 case class Snapshot(
-    time:     String,
+    time:     ZonedDateTime,
     parent:   Option[Hash],
     tree:     Hash,
     paths:    Seq[String],
@@ -187,6 +190,14 @@ case class Snapshot(
 )
 object Snapshot {
   import spray.json.DefaultJsonProtocol._
+  implicit val dateTimeFormat = new JsonFormat[ZonedDateTime] {
+    override def read(json: JsValue): ZonedDateTime = json match {
+      case JsString(str) => ZonedDateTime.parse(str, DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+    }
+
+    override def write(obj: ZonedDateTime): JsValue = ???
+  }
+
   implicit val snapshotFormat = jsonFormat10(Snapshot.apply _)
 }
 
