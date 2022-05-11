@@ -1,6 +1,8 @@
 package net.virtualvoid.restic
 package web
 
+import scala.language.postfixOps
+
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 
@@ -49,7 +51,18 @@ class ResticRoutes(reader: ResticRepository) {
               }
             }
           )
-        })
+        },
+        path("host" / Segment / Segments /) { (host, segments) =>
+          onSuccess(reader.allSnapshots()) { snaps =>
+            val thoseSnaps = snaps.filter(_.hostname == host)
+
+            val branchesF = MergedTreeNode.lookupBranch(segments, reader, thoseSnaps.map(_.tree))
+            onSuccess(branchesF) { branches =>
+              complete(html.MergedTree(branches))
+            }
+          }
+        }
+      )
     }
 
   lazy val auxiliary: Route =

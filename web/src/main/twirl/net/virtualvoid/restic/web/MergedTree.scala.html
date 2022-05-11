@@ -1,0 +1,16 @@
+@import net.virtualvoid.restic._
+
+@(children: Seq[MergedTreeNode])
+
+<table>
+    <tr><th>Name</th><th>Size</th><th>Num Parts</th></tr>
+@for(node <- children.sortBy(n => (!n.isBranch, n.name))) {
+    @if(node.isBranch) {
+        <tr><td><a href="@{node.name}/">@{node.name}</a></td></tr>
+    } else if (node.isLeaf) {
+        <tr>
+            <td><a href="@{node.name}">@{node.name}</a></td>
+        </tr>
+    }
+}
+</table>
