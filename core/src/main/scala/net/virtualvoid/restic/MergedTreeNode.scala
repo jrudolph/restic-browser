@@ -2,18 +2,10 @@ package net.virtualvoid.restic
 
 import scala.concurrent.Future
 
-sealed trait MergedTreeNode {
-  def name: String
-  def isBranch: Boolean
-  def isLeaf: Boolean = !isBranch
-  def revisions: Seq[(TreeNode, Snapshot)]
-}
-sealed trait MergedLeaf extends MergedTreeNode {
-  override def isBranch: Boolean = false
-}
-sealed trait MergedBranch extends MergedTreeNode {
-  override def isBranch: Boolean = true
-}
+case class MergedTreeNode(
+    name:      String,
+    revisions: Seq[(TreeNode, Snapshot)]
+)
 object MergedTreeNode {
   def lookupBranch(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[Seq[MergedTreeNode]] = {
     import repo.system.dispatcher
@@ -28,14 +20,7 @@ object MergedTreeNode {
               .groupBy(_._1.name)
               .toVector
               .map {
-                case (n, els) if els.head._1.isBranch => new MergedBranch {
-                  override def name: String = n
-                  override def revisions: Seq[(TreeNode, Snapshot)] = els
-                }
-                case (n, els) => new MergedLeaf {
-                  override def name: String = n
-                  override def revisions: Seq[(TreeNode, Snapshot)] = els
-                }
+                case (n, els) => MergedTreeNode(n, els)
               }
           }
       case next :: rem =>
