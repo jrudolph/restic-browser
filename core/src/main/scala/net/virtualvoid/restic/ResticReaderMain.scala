@@ -42,7 +42,7 @@ object ResticReaderMain extends App {
   val backingDir = new File("/tmp/restic-repo")
   val cacheBaseDir = new File("../restic-cache")
 
-  val reader = ResticReader.openRepository(backingDir, cacheBaseDir).get
+  val reader = ResticRepository.open(backingDir, cacheBaseDir).get
 
   import reader.loadTree
 
@@ -128,7 +128,7 @@ object ResticReaderMain extends App {
   def benchSync[T](desc: String)(f: => T): T = bench[T](desc)(Future.successful(f)).value.get.get
 
   def snapshotStats: Unit =
-    Future.traverse(ResticReader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
+    Future.traverse(ResticRepository.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
       .foreach { snaps =>
         snaps.toVector.sortBy(_._2.time).foreach { s =>
           println(s._1, s._2.time, s._2.hostname, s._2.paths, s._2.tags)
@@ -145,7 +145,7 @@ object ResticReaderMain extends App {
       }
     }
   def snapshotBackRefs(): Future[Seq[(Hash, SnapshotReference)]] =
-    Source(ResticReader.allFiles(reader.snapshotDir))
+    Source(ResticRepository.allFiles(reader.snapshotDir))
       .mapAsync(16)(f => reader.loadSnapshot(f).map(f.getName -> _))
       .map(s => s._2.tree -> SnapshotReference(Hash(s._1)))
       .runWith(Sink.seq[(Hash, SnapshotReference)])
@@ -208,7 +208,7 @@ object ResticReaderMain extends App {
 
       val snaps: Map[Hash, Snapshot] =
         Await.result(
-          Future.traverse(ResticReader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(Hash(f.getName) -> _)),
+          Future.traverse(ResticRepository.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(Hash(f.getName) -> _)),
           10.seconds).toMap
 
       def lookupRef(t: TreeReference): Future[TreeNode] = loadTree(t.treeBlobId).map(_.nodes(t.idx))
@@ -339,7 +339,7 @@ object ResticReaderMain extends App {
           else Future.successful(Vector.empty)
 
         def fastChains: Source[(Hash, Chain), Any] =
-          Source(ResticReader.allFiles(reader.snapshotDir))
+          Source(ResticRepository.allFiles(reader.snapshotDir))
             .mapAsync(1024)(f => reader.loadSnapshot(f).map(s => SnapshotNode(Hash(f.getName), s)))
             .mapAsync(1024)(snap => collectChains(snap.node.tree, snap :: Nil))
             .mapConcat(identity)

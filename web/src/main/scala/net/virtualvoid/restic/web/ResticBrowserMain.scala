@@ -16,7 +16,7 @@ object ResticBrowserMain extends App {
     res.mkdirs()
     res
   }
-  val reader = ResticReader.openRepository(repoDir, cacheDir).getOrElse(throw new RuntimeException(s"Couldn't open repository at $repoDir"))
+  val reader = ResticRepository.open(repoDir, cacheDir).getOrElse(throw new RuntimeException(s"Couldn't open repository at $repoDir"))
 
   val binding =
     Http().newServerAt("localhost", 8080)

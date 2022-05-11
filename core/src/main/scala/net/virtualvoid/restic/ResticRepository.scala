@@ -16,8 +16,8 @@ import scala.concurrent.duration._
 import scala.concurrent.{ Await, Future }
 import scala.util.Try
 
-object ResticReader {
-  def openRepository(repoDir: File, cacheBaseDir: File)(implicit system: ActorSystem): Option[ResticReader] = {
+object ResticRepository {
+  def open(repoDir: File, cacheBaseDir: File)(implicit system: ActorSystem): Option[ResticRepository] = {
     def prompt(): String = {
       Console.err.println(s"Enter password for repo at $repoDir:")
       Try(new String(System.console().readPassword()))
@@ -26,13 +26,13 @@ object ResticReader {
     val pass = sys.env.get("RESTIC_PASSWORD_FILE").map(scala.io.Source.fromFile(_).mkString).getOrElse(prompt)
     openRepository(repoDir, cacheBaseDir, pass)
   }
-  def openRepository(repoDir: File, cacheBaseDir: File, password: String)(implicit system: ActorSystem): Option[ResticReader] = {
+  def openRepository(repoDir: File, cacheBaseDir: File, password: String)(implicit system: ActorSystem): Option[ResticRepository] = {
     val keyDir = new File(repoDir, "keys")
     val allKeys = allFiles(keyDir)
     allKeys
       .flatMap(readJsonPlain[Key](_).tryDecrypt(password))
       .headOption
-      .map(mk => new ResticReader(repoDir, mk, cacheBaseDir))
+      .map(mk => new ResticRepository(repoDir, mk, cacheBaseDir))
   }
 
   def allFiles(dir: File): immutable.Iterable[File] = {
@@ -53,7 +53,7 @@ object ResticReader {
     scala.io.Source.fromFile(file).mkString.parseJson.convertTo[T]
 }
 
-class ResticReader(
+class ResticRepository(
     repoDir:      File,
     masterKey:    MasterKey,
     cacheBaseDir: File)(implicit val system: ActorSystem) {
@@ -82,7 +82,7 @@ class ResticReader(
     else Index.createIndex(packIndexFile, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(ResticReader.allFiles(reader.indexDir))
+    Source(ResticRepository.allFiles(reader.indexDir))
       .mapAsync(16)(f => reader.loadIndex(f))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))

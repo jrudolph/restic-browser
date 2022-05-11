@@ -6,7 +6,7 @@ import akka.http.scaladsl.server.Route
 
 import scala.concurrent.Future
 
-class ResticRoutes(reader: ResticReader) {
+class ResticRoutes(reader: ResticRepository) {
   import TwirlSupport._
 
   lazy val main = concat(
