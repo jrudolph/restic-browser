@@ -3,7 +3,7 @@
 @(children: Seq[MergedTreeNode])
 
 <table class="mergedtable ">
-    <tr><th>Name</th><th>Num Snapshots</th><th>First seen</th><th>Last seen</th><th>Num Versions</th></tr>
+    <tr><th>Name</th><th>Num Snapshots</th><th>First seen</th><th>Last seen</th><th>Num Versions</th><th>Last change</th></tr>
 @for(node <- children.sortBy(n => (!n.revisions.head._1.isBranch, n.name))) {
     <tr class="@{if (node.isOlderThanDays(180)) "old" else ""}">
         <td class="text"><a href="@{node.name}/">@{node.name}</a></td>
@@ -11,6 +11,7 @@
         <td>@{node.firstSeenPeriod}</td>
         <td>@{node.lastSeenPeriod}</td>
         <td>@{node.revisions.map { case (b: TreeBranch, _) => b.subtree; case (l: TreeLeaf, _) => l.content; case (l: TreeLink, _) => l.linktarget }.distinct.size}</td>
+        <td>@{node.lastNewVersionSeenPeriod}</td>
     </tr>
 }
 </table>

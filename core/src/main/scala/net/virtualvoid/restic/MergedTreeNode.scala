@@ -12,6 +12,13 @@ case class MergedTreeNode(
   def lastSeen: ZonedDateTime = revisions.map(_._2.time).max
   def lastSeenPeriod: String = convertToInterval(lastSeen)
 
+  def lastNewVersionSeen: ZonedDateTime =
+    revisions
+      .groupBy { case (b: TreeBranch, _) => b.subtree; case (l: TreeLeaf, _) => l.content; case (l: TreeLink, _) => l.linktarget }
+      .values
+      .map(_.map(_._2.time).min).max
+  def lastNewVersionSeenPeriod: String = convertToInterval(lastNewVersionSeen)
+
   def isOlderThanDays(days: Int): Boolean = Duration.between(lastSeen.toInstant, Instant.now()).toDays > days
 
   private def convertToInterval(dt: ZonedDateTime): String = {
