@@ -69,21 +69,27 @@ class ResticReader(
       if (length == -1) (file.length() - offset).toInt
       else length
     mapped.position(offset.toInt).limit(offset.toInt + len)
-  }(blockingExecutor).map(decryptBlob)(cpuBoundExecutor)
+  } /*(blockingExecutor)*/ .map(decryptBlob) /*(cpuBoundExecutor)*/
 
-  def decryptBlob(blob: ByteBuffer): Array[Byte] = {
+  class Decryptor {
     val cipher = Cipher.getInstance("AES/CTR/NoPadding")
     val ivBuffer = new Array[Byte](16)
-    blob.get(ivBuffer, 0, 16)
-      .limit(blob.limit() - 16)
 
-    val ivSpec = new IvParameterSpec(ivBuffer)
-    cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-
-    val outputBuffer = ByteBuffer.allocate(blob.remaining())
-    cipher.doFinal(blob, outputBuffer)
-    outputBuffer.array()
+    def decrypt(in: ByteBuffer): Array[Byte] = {
+      in.get(ivBuffer, 0, 16)
+        .limit(in.limit() - 16)
+      val ivSpec = new IvParameterSpec(ivBuffer)
+      cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+      val outputBuffer = ByteBuffer.allocate(in.remaining())
+      cipher.doFinal(in, outputBuffer)
+      outputBuffer.array()
+    }
   }
+
+  val decryptor = new ThreadLocal[Decryptor] {
+    override def initialValue(): Decryptor = new Decryptor
+  }
+  def decryptBlob(blob: ByteBuffer): Array[Byte] = decryptor.get().decrypt(blob)
 
   def packFile(id: Hash): File = {
     import FileExtension._
