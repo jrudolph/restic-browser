@@ -16,14 +16,12 @@ import scala.collection.immutable
 import scala.concurrent.{ ExecutionContext, Future }
 
 class ResticReader(
-    repoDir:          File,
-    backingDir:       File,
-    cacheBaseDir:     File,
-    cpuBoundExecutor: ExecutionContext,
-    blockingExecutor: ExecutionContext)(implicit val system: ActorSystem) {
+    repoId:       String,
+    backingDir:   File,
+    cacheBaseDir: File)(implicit val system: ActorSystem) {
   import system.dispatcher
 
-  val repoId = repoDir.getName
+  val repoCacheDir = new File(s"${sys.env("HOME")}/.cache/restic/$repoId")
   val cacheDir = {
     val res = new File(cacheBaseDir, repoId)
     res.mkdirs()
@@ -69,7 +67,7 @@ class ResticReader(
       if (length == -1) (file.length() - offset).toInt
       else length
     mapped.position(offset.toInt).limit(offset.toInt + len)
-  } /*(blockingExecutor)*/ .map(decryptBlob) /*(cpuBoundExecutor)*/
+  }.map(decryptBlob)
 
   class Decryptor {
     val cipher = Cipher.getInstance("AES/CTR/NoPadding")
@@ -136,11 +134,11 @@ class ResticReader(
 
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length)
-      .map(data => new String(data, "utf8").parseJson.convertTo[T])(cpuBoundExecutor)
+      .map(data => new String(data, "utf8").parseJson.convertTo[T]) //(cpuBoundExecutor)
 
-  val indexDir = new File(repoDir, "index")
-  val snapshotDir = new File(repoDir, "snapshots")
-  val dataDir = new File(repoDir, "data")
+  val indexDir = new File(repoCacheDir, "index")
+  val snapshotDir = new File(repoCacheDir, "snapshots")
+  val dataDir = new File(repoCacheDir, "data")
 
   def allFiles(dir: File): immutable.Iterable[File] = {
     def walk(dir: File): immutable.Iterable[File] = {

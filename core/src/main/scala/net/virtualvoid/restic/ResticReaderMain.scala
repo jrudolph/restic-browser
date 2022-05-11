@@ -39,17 +39,15 @@ object ResticReaderMain extends App {
   import system.dispatcher
 
   //val indexFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/index/00/006091dfe0cd65b2240f7e05eb6d7df5122f077940619f3a1092da60134a3db0"
-  val dataFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/data/5c/5c141f74d422dd3607f0009def9ffd369fc68bf3a7a6214eb8b4d5638085e929"
+  //val dataFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/data/5c/5c141f74d422dd3607f0009def9ffd369fc68bf3a7a6214eb8b4d5638085e929"
   //val res = readBlobFile(new File(dataFile), 820)
   //val res = readJson[IndexFile](new File(indexFile))
-  val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
-  val repoId = repoDir.getName
+  //val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
+  val repoId = system.settings.config.getString("restic.repo-id")
   val backingDir = new File("/tmp/restic-repo")
   val cacheBaseDir = new File("../restic-cache")
 
-  val reader = new ResticReader(repoDir, backingDir, cacheBaseDir,
-    system.dispatcher,
-    system.dispatcher
+  val reader = new ResticReader(repoId, backingDir, cacheBaseDir
   //system.dispatchers.lookup("blocking-dispatcher")
   )
 

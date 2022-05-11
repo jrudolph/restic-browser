@@ -5,7 +5,6 @@ import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 
 import java.io.File
-import scala.concurrent.Future
 
 object ResticBrowserMain extends App {
   implicit val system = ActorSystem()
@@ -19,7 +18,8 @@ object ResticBrowserMain extends App {
     res.mkdirs()
     res
   }
-  val reader = new ResticReader(repoDir, backingDir, cacheDir, system.dispatcher, system.dispatchers.lookup("blocking-dispatcher"))
+  val repoId = system.settings.config.getString("restic.repo-id")
+  val reader = new ResticReader(repoId, backingDir, cacheDir)
 
   val binding =
     Http().newServerAt("localhost", 8080)
