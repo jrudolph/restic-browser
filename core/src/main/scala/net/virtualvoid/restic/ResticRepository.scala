@@ -23,7 +23,13 @@ object ResticRepository {
       Try(new String(System.console().readPassword()))
         .getOrElse(throw new IllegalArgumentException("Couldn't read password from shell or RESTIC_PASSWORD_FILE"))
     }
-    val pass = sys.env.get("RESTIC_PASSWORD_FILE").map(scala.io.Source.fromFile(_).mkString).getOrElse(prompt)
+    def loadPasswordFile(fileName: String): String = scala.io.Source.fromFile(fileName).mkString.trim
+    val pass =
+      Try(system.settings.config.getString("restic.password-file"))
+        .toOption
+        .orElse(sys.env.get("RESTIC_PASSWORD_FILE"))
+        .map(loadPasswordFile)
+        .getOrElse(prompt)
     openRepository(repoDir, cacheBaseDir, pass)
   }
   def openRepository(repoDir: File, cacheBaseDir: File, password: String)(implicit system: ActorSystem): Option[ResticRepository] = {
