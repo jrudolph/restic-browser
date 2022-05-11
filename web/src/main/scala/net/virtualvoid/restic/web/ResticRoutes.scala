@@ -1,8 +1,6 @@
 package net.virtualvoid.restic
 package web
 
-import scala.language.postfixOps
-
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 
@@ -52,7 +50,7 @@ class ResticRoutes(reader: ResticRepository) {
             }
           )
         },
-        path("host" / Segment / Segments /) { (host, segments) =>
+        (pathPrefix("host" / Segment / Segments) & pathEndOrSingleSlash) { (host, segments) =>
           onSuccess(reader.allSnapshots()) { snaps =>
             val thoseSnaps = snaps.filter(_.hostname == host)
 
