@@ -5,29 +5,76 @@ import akka.stream.scaladsl.Source
 import net.virtualvoid.restic.ResticReaderMain.reader
 import spray.json._
 
-import java.io.{ File, FileInputStream }
+import java.io.File
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
 import java.nio.{ ByteBuffer, MappedByteBuffer }
-import javax.crypto.Cipher
-import javax.crypto.spec.{ IvParameterSpec, SecretKeySpec }
+import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable
-import scala.concurrent.{ ExecutionContext, Future }
+import scala.concurrent.duration._
+import scala.concurrent.{ Await, Future }
+import scala.util.Try
+
+object ResticReader {
+  def openRepository(repoDir: File, cacheBaseDir: File)(implicit system: ActorSystem): Option[ResticReader] = {
+    def prompt(): String = {
+      Console.err.println(s"Enter password for repo at $repoDir:")
+      Try(new String(System.console().readPassword()))
+        .getOrElse(throw new IllegalArgumentException("Couldn't read password from shell or RESTIC_PASSWORD_FILE"))
+    }
+    val pass = sys.env.get("RESTIC_PASSWORD_FILE").map(scala.io.Source.fromFile(_).mkString).getOrElse(prompt)
+    openRepository(repoDir, cacheBaseDir, pass)
+  }
+  def openRepository(repoDir: File, cacheBaseDir: File, password: String)(implicit system: ActorSystem): Option[ResticReader] = {
+    val keyDir = new File(repoDir, "keys")
+    val allKeys = allFiles(keyDir)
+    allKeys
+      .flatMap(readJsonPlain[Key](_).tryDecrypt(password))
+      .headOption
+      .map(mk => new ResticReader(repoDir, mk, cacheBaseDir))
+  }
+
+  def allFiles(dir: File): immutable.Iterable[File] = {
+    def walk(dir: File): immutable.Iterable[File] = {
+      require(dir.isDirectory)
+      dir.listFiles()
+        .filterNot(p => p.getName == "." || p.getName == "..")
+        .flatMap { f =>
+          if (f.isFile) Iterable(f)
+          else walk(f)
+        }
+    }
+
+    walk(dir)
+  }
+
+  def readJsonPlain[T: JsonFormat](file: File): T =
+    scala.io.Source.fromFile(file).mkString.parseJson.convertTo[T]
+}
 
 class ResticReader(
-    repoId:       String,
-    backingDir:   File,
+    repoDir:      File,
+    masterKey:    MasterKey,
     cacheBaseDir: File)(implicit val system: ActorSystem) {
   import system.dispatcher
+  val keySpec = new SecretKeySpec(masterKey.encrypt.bytes, "AES")
+  val decryptor = ThreadLocal.withInitial(() => new Decryptor(keySpec))
 
-  val repoCacheDir = new File(s"${sys.env("HOME")}/.cache/restic/$repoId")
-  val cacheDir = {
+  private var mappedFiles: Map[File, MappedByteBuffer] = Map.empty
+
+  val configFile = new File(repoDir, "config")
+  val repoConfig = Await.result(readJson[Config](configFile), 3.seconds)
+  lazy val repoId = repoConfig.id
+  Console.err.println(s"Successfully opened repo $repoId at $repoDir")
+
+  val resticCacheDir = new File(s"${sys.env("HOME")}/.cache/restic/$repoId")
+  val localCacheDir = {
     val res = new File(cacheBaseDir, repoId)
     res.mkdirs()
     res
   }
-  val packIndexFile = new File(cacheDir, "pack.idx")
+  val packIndexFile = new File(localCacheDir, "pack.idx")
 
   private implicit val indexEntrySerializer = PackBlobSerializer
   lazy val packIndex: Future[Index[PackEntry]] =
@@ -35,22 +82,12 @@ class ResticReader(
     else Index.createIndex(packIndexFile, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(reader.allFiles(reader.indexDir))
+    Source(ResticReader.allFiles(reader.indexDir))
       .mapAsync(16)(f => reader.loadIndex(f))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
       }
 
-  val secret = {
-    val fis = new FileInputStream("../secret")
-    val res = new Array[Byte](32)
-    val read = fis.read(res)
-    require(read == 32)
-    res
-  }
-  val keySpec = new SecretKeySpec(secret, "AES")
-
-  private var mappedFiles: Map[File, MappedByteBuffer] = Map.empty
   private def mappedFileFor(file: File): MappedByteBuffer = synchronized {
     mappedFiles.get(file) match {
       case Some(b) => b
@@ -61,32 +98,17 @@ class ResticReader(
         buffer
     }
   }
-  def readBlobFile(file: File, offset: Long = 0, length: Int = -1): Future[Array[Byte]] = Future {
+  def readBlobFile(file: File, offset: Long = 0, length: Int = -1): Future[Array[Byte]] =
+    readBlobFilePlain(file, offset, length).map(decryptBlob)
+
+  def readBlobFilePlain(file: File, offset: Long = 0, length: Int = -1): Future[ByteBuffer] = Future {
     val mapped = mappedFileFor(file).duplicate()
     val len =
       if (length == -1) (file.length() - offset).toInt
       else length
     mapped.position(offset.toInt).limit(offset.toInt + len)
-  }.map(decryptBlob)
-
-  class Decryptor {
-    val cipher = Cipher.getInstance("AES/CTR/NoPadding")
-    val ivBuffer = new Array[Byte](16)
-
-    def decrypt(in: ByteBuffer): Array[Byte] = {
-      in.get(ivBuffer, 0, 16)
-        .limit(in.limit() - 16)
-      val ivSpec = new IvParameterSpec(ivBuffer)
-      cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
-      val outputBuffer = ByteBuffer.allocate(in.remaining())
-      cipher.doFinal(in, outputBuffer)
-      outputBuffer.array()
-    }
   }
 
-  val decryptor = new ThreadLocal[Decryptor] {
-    override def initialValue(): Decryptor = new Decryptor
-  }
   def decryptBlob(blob: ByteBuffer): Array[Byte] = decryptor.get().decrypt(blob)
 
   def packFile(id: Hash): File = {
@@ -96,11 +118,11 @@ class ResticReader(
     val res = new File(dataDir, path).resolved
     if (res.exists()) res
     else {
-      val cached = new File(cacheDir, "data/" + path).resolved
+      val cached = new File(localCacheDir, "data/" + path).resolved
       if (cached.exists()) cached
       else {
-        val backing = new File(backingDir, "data/" + path).resolved
-        if (backingDir.exists()) {
+        val backing = new File(repoDir, "data/" + path).resolved
+        if (repoDir.exists()) {
           cached.getParentFile.mkdirs()
           val tmpFile = File.createTempFile(cached.getName.take(20) + "-", ".tmp", cached.getParentFile)
           tmpFile.delete()
@@ -134,23 +156,9 @@ class ResticReader(
 
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length)
-      .map(data => new String(data, "utf8").parseJson.convertTo[T]) //(cpuBoundExecutor)
+      .map(data => new String(data, "utf8").parseJson.convertTo[T])
 
-  val indexDir = new File(repoCacheDir, "index")
-  val snapshotDir = new File(repoCacheDir, "snapshots")
-  val dataDir = new File(repoCacheDir, "data")
-
-  def allFiles(dir: File): immutable.Iterable[File] = {
-    def walk(dir: File): immutable.Iterable[File] = {
-      require(dir.isDirectory)
-      dir.listFiles()
-        .filterNot(p => p.getName == "." || p.getName == "..")
-        .flatMap { f =>
-          if (f.isFile) Iterable(f)
-          else walk(f)
-        }
-    }
-
-    walk(dir)
-  }
+  val indexDir = new File(resticCacheDir, "index")
+  val snapshotDir = new File(resticCacheDir, "snapshots")
+  val dataDir = new File(resticCacheDir, "data")
 }

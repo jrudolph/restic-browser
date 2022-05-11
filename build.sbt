@@ -20,6 +20,7 @@ lazy val core =
         "com.typesafe.akka" %% "akka-stream" % akkaV,
         "com.typesafe.akka" %% "akka-http-caching" % akkaHttpV,
         "io.spray" %% "spray-json" % sprayJsonV,
+        "com.lambdaworks" % "scrypt" % "1.4.0",
         "org.scalatest" %% "scalatest" % scalaTestV % "test",
       )
     )

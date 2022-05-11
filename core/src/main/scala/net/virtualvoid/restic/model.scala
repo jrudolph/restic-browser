@@ -1,10 +1,13 @@
 package net.virtualvoid.restic
 
+import com.lambdaworks.crypto.SCrypt
 import spray.json._
 
 import java.nio.ByteBuffer
-import java.util
+import java.util.Base64
+import javax.crypto.spec.SecretKeySpec
 import scala.annotation.tailrec
+import scala.util.Try
 
 final class Hash private (val bytes: Array[Byte]) {
   override lazy val hashCode: Int =
@@ -185,6 +188,57 @@ case class Snapshot(
 object Snapshot {
   import spray.json.DefaultJsonProtocol._
   implicit val snapshotFormat = jsonFormat10(Snapshot.apply _)
+}
+
+case class Config(
+    version:            Int,
+    id:                 String,
+    chunker_polynomial: String
+)
+object Config {
+  import spray.json.DefaultJsonProtocol._
+  implicit val configFormat = jsonFormat3(Config.apply _)
+}
+
+class Base64Bytes(val bytes: Array[Byte]) extends AnyVal
+object Base64Bytes {
+  implicit val bytesAsBase64String: JsonFormat[Base64Bytes] = new JsonFormat[Base64Bytes] {
+    override def read(json: JsValue): Base64Bytes = json match {
+      case JsString(str) => new Base64Bytes(Base64.getDecoder.decode(str))
+    }
+    override def write(obj: Base64Bytes): JsValue = ???
+  }
+}
+
+case class Mac(k: Base64Bytes, r: Base64Bytes)
+case class MasterKey(mac: Mac, encrypt: Base64Bytes)
+object MasterKey {
+  import spray.json.DefaultJsonProtocol._
+
+  implicit val macFormat = jsonFormat2(Mac.apply _)
+  implicit val keyFormat = jsonFormat2(MasterKey.apply _)
+}
+
+case class Key(
+    username: String,
+    hostname: String,
+    kdf:      String,
+    N:        Int,
+    r:        Int,
+    p:        Int,
+    salt:     Base64Bytes,
+    data:     Base64Bytes,
+    created:  String
+) {
+  def tryDecrypt(password: String): Option[MasterKey] = {
+    val key = SCrypt.scrypt(password.getBytes("utf8"), salt.bytes, N, r, p, 64)
+    val decr = new Decryptor(new SecretKeySpec(key.take(32), "AES"))
+    Try(new String(decr.decrypt(ByteBuffer.wrap(data.bytes))).parseJson.convertTo[MasterKey]).toOption
+  }
+}
+object Key {
+  import spray.json.DefaultJsonProtocol._
+  implicit val keyFormat = jsonFormat9(Key.apply _)
 }
 
 // for use in index

@@ -35,6 +35,7 @@ trait Index[T] {
 }
 
 object Index {
+  def trace(msg: String): Unit = Console.err.println(msg)
   def createIndex[T: Serializer](indexFile: File, data: Source[(Hash, T), Any])(implicit mat: Materializer): Future[Index[T]] = {
     val serializer = implicitly[Serializer[T]]
     import mat.executionContext
@@ -68,7 +69,7 @@ object Index {
       val tmpDataFile = File.createTempFile(s".${indexFile.getName}-values", ".tmp", indexFile.getParentFile)
       tmpDataFile.deleteOnExit()
 
-      println(s"[${indexFile.getName}] Streaming data to tmp file ${tmpDataFile}")
+      trace(s"[${indexFile.getName}] Streaming data to tmp file ${tmpDataFile}")
       val dataOut = new BufferedOutputStream(new FileOutputStream(tmpDataFile), 1000000)
       val dataWriter = osWriter(dataOut)
 
@@ -98,7 +99,7 @@ object Index {
       // round down to previous power of 2
       val bucketBits = math.max(1, 32 - Integer.numberOfLeadingZeros(numEntries) - 4)
       val buckets = 1 << bucketBits
-      println(s"[${indexFile.getName}] Sorting into $buckets buckets ($bucketBits bits) for $numEntries entries")
+      trace(s"[${indexFile.getName}] Sorting into $buckets buckets ($bucketBits bits) for $numEntries entries")
 
       // create histogram - size: ~ buckets bytes
       val bucketHistogram = Array.fill[Int](buckets)(0) // TODO: use one array for offsets + bucketHistogram
@@ -106,7 +107,7 @@ object Index {
         val key = keyAt(i)
         val bucket = (key >>> (60 - bucketBits)).toInt
         val n = bucketHistogram(bucket)
-        //println(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
+        //trace(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
         bucketHistogram(bucket) = (n + 1)
       }
       // find cumulative offsets - size: ~ buckets * 4 bytes
@@ -123,7 +124,7 @@ object Index {
       }
 
       // sort buckets
-      println(s"[${indexFile.getName}] Sort buckets");
+      trace(s"[${indexFile.getName}] Sort buckets");
       //
       {
         var at = 0
@@ -131,13 +132,13 @@ object Index {
         while (bucket < buckets) {
           val end = offsets(bucket)
           while (at < end) {
-            //println(f"at: $at%10d bucket: $bucket%10d")
+            //trace(f"at: $at%10d bucket: $bucket%10d")
             val targetKey = keyAt(indices(at))
 
             var pos = at - 1
             while (pos >= 0 && {
               val cand = keyAt(indices(pos))
-              //println(f"at: $at%10d end: $end%10d bucket: $bucket%10d pos: $pos%10d targetKey: $targetKey%015x $cand%015x")
+              //trace(f"at: $at%10d end: $end%10d bucket: $bucket%10d pos: $pos%10d targetKey: $targetKey%015x $cand%015x")
               targetKey < cand
             }) {
 
@@ -155,7 +156,7 @@ object Index {
         }
       }
 
-      println(s"[${indexFile.getName}] Creating final index")
+      trace(s"[${indexFile.getName}] Creating final index")
 
       // Copy out entries in the right order
       val tmpIndexFile = File.createTempFile(s".${indexFile.getName}-indices", ".tmp", indexFile.getParentFile)
@@ -183,7 +184,7 @@ object Index {
     val file = FileChannel.open(indexFile.toPath)
     val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
     val numEntries = ((indexFile.length() - HeaderSize) / EntrySize).toInt
-    println(s"[${indexFile.getName}] Found $numEntries")
+    trace(s"[${indexFile.getName}] Found $numEntries")
 
     val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
 
@@ -257,7 +258,7 @@ object Index {
         @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int, trace: Boolean = false): (Int, Int) =
           {
             val guessKey = keyAt(guess)
-            if (trace) println(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+            if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
             if (guessKey == targetKey) (guess, step)
             else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
             else if (step > 50) // 10 + log2(numEntries)

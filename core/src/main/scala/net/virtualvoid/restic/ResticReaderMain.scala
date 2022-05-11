@@ -5,6 +5,7 @@ import akka.actor.ActorSystem
 import akka.http.caching.LfuCache
 import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
 import akka.stream.scaladsl.{ Sink, Source }
+import akka.util.ByteString
 import com.github.benmanes.caffeine.cache.Caffeine
 import net.virtualvoid.restic.ResticReaderMain.reader
 
@@ -38,18 +39,10 @@ object ResticReaderMain extends App {
   implicit val system = ActorSystem()
   import system.dispatcher
 
-  //val indexFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/index/00/006091dfe0cd65b2240f7e05eb6d7df5122f077940619f3a1092da60134a3db0"
-  //val dataFile = "/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/data/5c/5c141f74d422dd3607f0009def9ffd369fc68bf3a7a6214eb8b4d5638085e929"
-  //val res = readBlobFile(new File(dataFile), 820)
-  //val res = readJson[IndexFile](new File(indexFile))
-  //val repoDir = new File("/home/johannes/.cache/restic/0227d36ed1e3dc0d975ca4a93653b453802da67f0b34767266a43d20c9f86275/")
-  val repoId = system.settings.config.getString("restic.repo-id")
   val backingDir = new File("/tmp/restic-repo")
   val cacheBaseDir = new File("../restic-cache")
 
-  val reader = new ResticReader(repoId, backingDir, cacheBaseDir
-  //system.dispatchers.lookup("blocking-dispatcher")
-  )
+  val reader = ResticReader.openRepository(backingDir, cacheBaseDir).get
 
   import reader.loadTree
 
@@ -135,7 +128,7 @@ object ResticReaderMain extends App {
   def benchSync[T](desc: String)(f: => T): T = bench[T](desc)(Future.successful(f)).value.get.get
 
   def snapshotStats: Unit =
-    Future.traverse(reader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
+    Future.traverse(ResticReader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
       .foreach { snaps =>
         snaps.toVector.sortBy(_._2.time).foreach { s =>
           println(s._1, s._2.time, s._2.hostname, s._2.paths, s._2.tags)
@@ -152,12 +145,12 @@ object ResticReaderMain extends App {
       }
     }
   def snapshotBackRefs(): Future[Seq[(Hash, SnapshotReference)]] =
-    Source(reader.allFiles(reader.snapshotDir))
+    Source(ResticReader.allFiles(reader.snapshotDir))
       .mapAsync(16)(f => reader.loadSnapshot(f).map(f.getName -> _))
       .map(s => s._2.tree -> SnapshotReference(Hash(s._1)))
       .runWith(Sink.seq[(Hash, SnapshotReference)])
 
-  val backrefIndexFile = new File(reader.cacheDir, "backrefs.idx")
+  val backrefIndexFile = new File(reader.localCacheDir, "backrefs.idx")
   implicit object BackReferenceSerializer extends Serializer[BackReference] {
     override def entrySize: Int = 40
 
@@ -215,7 +208,7 @@ object ResticReaderMain extends App {
 
       val snaps: Map[Hash, Snapshot] =
         Await.result(
-          Future.traverse(reader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(Hash(f.getName) -> _)),
+          Future.traverse(ResticReader.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(Hash(f.getName) -> _)),
           10.seconds).toMap
 
       def lookupRef(t: TreeReference): Future[TreeNode] = loadTree(t.treeBlobId).map(_.nodes(t.idx))
@@ -346,7 +339,7 @@ object ResticReaderMain extends App {
           else Future.successful(Vector.empty)
 
         def fastChains: Source[(Hash, Chain), Any] =
-          Source(reader.allFiles(reader.snapshotDir))
+          Source(ResticReader.allFiles(reader.snapshotDir))
             .mapAsync(1024)(f => reader.loadSnapshot(f).map(s => SnapshotNode(Hash(f.getName), s)))
             .mapAsync(1024)(snap => collectChains(snap.node.tree, snap :: Nil))
             .mapConcat(identity)
