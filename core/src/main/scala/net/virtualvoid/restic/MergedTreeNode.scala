@@ -4,16 +4,6 @@ import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
 import scala.concurrent.Future
 import MergedTreeNode.convertToInterval
 
-sealed trait Child
-sealed trait DirectoryChild {
-  def treeId: Hash
-}
-case class TreeDirectoryChild(treeBlobId: Hash, node: TreeBranch) extends DirectoryChild {
-  override def treeId: Hash = node.subtree
-}
-case class FileChild(treeBlobId: Hash, node: TreeLeaf) extends Child
-case class SnapshotRoot(treeId: Hash) extends DirectoryChild
-
 case class PathRevision(snapshots: Seq[Snapshot], treeBlobId: Hash, node: TreeNode) {
   def firstSeen: ZonedDateTime = snapshots.map(_.time).min
   def firstSeenPeriod: String = convertToInterval(firstSeen)
@@ -41,50 +31,16 @@ case class MergedTreeNode(
   def isOlderThanDays(days: Int): Boolean = Duration.between(lastSeen.toInstant, Instant.now()).toDays > days
 }
 object MergedTreeNode {
-  def lookupBranch(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[Seq[MergedTreeNode]] = {
+  def lookupNode(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[(MergedTreeNode, Seq[MergedTreeNode])] = {
     import repo.system.dispatcher
-    def rec(path: List[String], roots: Seq[(Hash, Seq[Snapshot])]): Future[Seq[MergedTreeNode]] = path match {
-      case Nil =>
-        Future.traverse(roots) { case (tree, snap) => repo.loadTree(tree).map(b => (tree, b, snap)) }
-          .map { blobs =>
-            blobs.flatMap {
-              case (blobId, blob, snaps) =>
-                blob.nodes.map(n => PathRevision(snaps, blobId, n))
-            }
-              .groupBy(_.node.name)
-              .toVector
-              .map {
-                case (n, els) => MergedTreeNode(n, els)
-              }
-          }
-      case next :: rem =>
-        Future.traverse(roots) { case (tree, snap) => repo.loadTree(tree).map(_ -> snap) }
-          .map { blobs =>
-            blobs.flatMap {
-              case (blob, snap) =>
-                blob.nodes.collect { case b: TreeBranch if b.name == next => b.subtree -> snap }
-            }.groupBy(_._1).view.mapValues(_.flatMap(_._2)).toVector
-          }
-          .flatMap(newRoots => rec(rem, newRoots))
-    }
-
-    rec(path.toList, snapshots.map(s => s.tree -> Seq(s)))
-  }
-
-  def lookupBranch2(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[(MergedTreeNode, Seq[MergedTreeNode])] = {
-    import repo.system.dispatcher
-    def rec(at: MergedTreeNode, path: List[String]): Future[(MergedTreeNode, Seq[MergedTreeNode])] = path match {
-      case last :: Nil =>
-        lookupChildren(at, repo).map { children =>
-          children.filter(_.name == last).head
-        }.flatMap { merged =>
-          lookupChildren(merged, repo).map(chs => merged -> chs)
+    def rec(at: MergedTreeNode, path: List[String]): Future[(MergedTreeNode, Seq[MergedTreeNode])] =
+      lookupChildren(at, repo).flatMap { children =>
+        path match {
+          case Nil          => Future.successful(at -> children)
+          case head :: tail => rec(children.find(_.name == head).get, tail)
         }
-      case head :: tail =>
-        lookupChildren(at, repo).map { children =>
-          children.filter(_.name == head).head
-        }.flatMap(rec(_, tail))
-    }
+      }
+
     rec(
       MergedTreeNode("", snapshots.groupBy(_.tree).map { case (tree, snaps) => PathRevision(snaps, Hash("00") /* dummy */ , TreeBranch("".asInstanceOf[CachedName.T], tree)) }.toVector),
       path.toList

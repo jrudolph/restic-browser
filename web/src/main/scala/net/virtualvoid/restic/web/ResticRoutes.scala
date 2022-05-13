@@ -54,7 +54,7 @@ class ResticRoutes(reader: ResticRepository) {
           onSuccess(reader.allSnapshots()) { snaps =>
             val thoseSnaps = snaps.filter(_.hostname == host)
 
-            val branchesF = MergedTreeNode.lookupBranch2(segments, reader, thoseSnaps)
+            val branchesF = MergedTreeNode.lookupNode(segments, reader, thoseSnaps)
             onSuccess(branchesF) { (thisNode, children) =>
               complete(html.MergedTree(thisNode, children))
             }
