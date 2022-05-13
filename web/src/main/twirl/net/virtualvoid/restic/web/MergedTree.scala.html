@@ -1,6 +1,8 @@
 @import net.virtualvoid.restic._
 
-@(thisNode: MergedTreeNode, children: Seq[MergedTreeNode])
+@(host: String, path: Seq[String], thisNode: MergedTreeNode, children: Seq[MergedTreeNode])
+
+<h3><div><a href="/host/@host/">@host</a>:@for((p, full) <- path.scanLeft("/" -> "")((p, next) => next -> (p._2+"/"+next)).drop(1)){/<a href="/host/@host@full/">@p</a>}</div></h3>
 
 @if(children.nonEmpty) {
 <table class="mergedtable ">
