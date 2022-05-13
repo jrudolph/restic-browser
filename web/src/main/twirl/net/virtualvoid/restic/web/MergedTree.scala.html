@@ -1,17 +1,45 @@
 @import net.virtualvoid.restic._
 
-@(children: Seq[MergedTreeNode])
+@(thisNode: MergedTreeNode, children: Seq[MergedTreeNode])
 
+@if(children.nonEmpty) {
 <table class="mergedtable ">
     <tr><th>Name</th><th>Num Snapshots</th><th>First seen</th><th>Last seen</th><th>Num Versions</th><th>Last change</th></tr>
 @for(node <- children.sortBy(n => (!n.revisions.head._1.isBranch, n.name))) {
-    <tr class="@{if (node.isOlderThanDays(180)) "old" else ""}">
+    <tr class="@{if (node.lastSeen.isBefore(thisNode.lastSeen)) "old" else ""}">
         <td class="text"><a href="@{node.name}/">@{node.name}</a></td>
         <td>@{node.revisions.size}</td>
         <td>@{node.firstSeenPeriod}</td>
         <td>@{node.lastSeenPeriod}</td>
         <td>@{node.revisions.map { case (b: TreeBranch, _) => b.subtree; case (l: TreeLeaf, _) => l.content; case (l: TreeLink, _) => l.linktarget }.distinct.size}</td>
         <td>@{node.lastNewVersionSeenPeriod}</td>
+    </tr>
+}
+</table>
+}
+
+<h3>Versions</h3>
+
+<table>
+    <tr>
+        <th>Num Snapshots</th>
+        <th>First seen</th>
+        <th>Last seen</th>
+        <th>Size</th>
+        <th>Version</th>
+    </tr>
+@for(rev <- thisNode.nestedRevisions.sortBy(_.lastSeen).reverse) {
+    <tr>
+        <td>@{rev.snapshots.size}</td>
+        <td>@{rev.firstSeenPeriod}</td>
+        <td>@{rev.lastSeenPeriod}</td>
+        @if(rev.node.isBranch) {
+            <td></td>
+            <td><a href="/blob/@{rev.node.asInstanceOf[TreeBranch].subtree}">@{rev.node.asInstanceOf[TreeBranch].subtree}</a></td>
+        } else if (rev.node.isLeaf){
+            <td>@{rev.node.asInstanceOf[TreeLeaf].size}</td>
+            <td><a href="/blob/@{rev.treeBlobId}/@{rev.node.name}">@{rev.treeBlobId.toString.take(16)}/@{rev.node.name}</a></td>
+        }
     </tr>
 }
 </table>
