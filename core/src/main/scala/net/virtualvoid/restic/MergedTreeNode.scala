@@ -40,6 +40,15 @@ case class MergedTreeNode(
     val parentLasts = lastPerSnapshotSpec(parentNode)
     !thisLasts.exists { case (s, t) => parentLasts(s) == t }
   }
+  def sizesString: String = {
+    val sizes =
+      nestedRevisions.map(_.node).collect {
+        case l: TreeLeaf => l.size.getOrElse(0L)
+      }
+    if (sizes.isEmpty) ""
+    else if (sizes.size == 1) sizes.head.toString
+    else s"${sizes.min} - ${sizes.max}"
+  }
 }
 object MergedTreeNode {
   def lookupNode(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[(MergedTreeNode, Seq[MergedTreeNode])] = {
