@@ -29,6 +29,17 @@ case class MergedTreeNode(
   def lastNewVersionSeenPeriod: String = convertToInterval(lastNewVersionSeen)
 
   def isOlderThanDays(days: Int): Boolean = Duration.between(lastSeen.toInstant, Instant.now()).toDays > days
+
+  def hasBeenDeletedIn(parentNode: MergedTreeNode): Boolean = {
+    def lastPerSnapshotSpec(node: MergedTreeNode): Map[(String, Seq[String]), ZonedDateTime] =
+      node.nestedRevisions.flatMap(_.snapshots)
+        .groupBy(s => (s.hostname, s.paths))
+        .view.mapValues(_.map(_.time).max).toMap
+
+    val thisLasts = lastPerSnapshotSpec(this)
+    val parentLasts = lastPerSnapshotSpec(parentNode)
+    !thisLasts.exists { case (s, t) => parentLasts(s) == t }
+  }
 }
 object MergedTreeNode {
   def lookupNode(path: Seq[String], repo: ResticRepository, snapshots: Seq[Snapshot]): Future[(MergedTreeNode, Seq[MergedTreeNode])] = {
