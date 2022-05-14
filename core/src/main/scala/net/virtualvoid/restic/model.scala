@@ -182,12 +182,14 @@ case class Snapshot(
     tree:     Hash,
     paths:    Seq[String],
     hostname: String,
-    tags:     Seq[String],
+    tags:     Option[Seq[String]],
     username: String,
     uid:      Option[Int],
     gid:      Option[Int],
     excludes: Option[Seq[String]]
-)
+) {
+  def flatTags: Seq[String] = tags.toSeq.flatten
+}
 object Snapshot {
   import spray.json.DefaultJsonProtocol._
   implicit val dateTimeFormat = new JsonFormat[ZonedDateTime] {

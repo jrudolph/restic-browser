@@ -98,7 +98,7 @@ class ResticRoutes(reader: ResticRepository) {
   def snapshotInfos: Future[Seq[SnapshotInfo]] =
     reader.allSnapshots()
       .map { snaps =>
-        snaps.groupBy(s => (s.hostname, s.paths.toSet, s.tags.toSet))
+        snaps.groupBy(s => (s.hostname, s.paths.toSet, s.flatTags.toSet))
           .map {
             case ((host, paths, tags), snaps) => SnapshotInfo(host, paths, tags, snaps)
           }
