@@ -116,25 +116,39 @@ class ResticRepository(
 
   def decryptBlob(blob: ByteBuffer): Array[Byte] = decryptor.get().decrypt(blob)
 
-  def packFile(id: Hash): File = {
+  private var downloads: Map[File, Future[File]] = Map.empty
+  def download(from: File, to: File): Future[File] =
+    synchronized {
+      downloads.get(from) match {
+        case Some(f) => f
+        case None =>
+          val f = Future {
+            val tmpFile = File.createTempFile(to.getName.take(20) + "-", ".tmp", to.getParentFile)
+            tmpFile.delete()
+            Files.copy(from.toPath, tmpFile.toPath)
+            tmpFile.renameTo(to)
+            to
+          }
+          downloads += from -> f
+          f
+      }
+    }
+
+  def packFile(id: Hash): Future[File] = {
     import FileExtension._
 
     val path = s"${id.toString.take(2)}/$id"
     val res = new File(dataDir, path).resolved
-    if (res.exists()) res
+    if (res.exists()) Future.successful(res)
     else {
       val cached = new File(localCacheDir, "data/" + path).resolved
-      if (cached.exists()) cached
+      if (cached.exists()) Future.successful(cached)
       else {
         val backing = new File(repoDir, "data/" + path).resolved
         if (repoDir.exists()) {
           cached.getParentFile.mkdirs()
-          val tmpFile = File.createTempFile(cached.getName.take(20) + "-", ".tmp", cached.getParentFile)
-          tmpFile.delete()
-          Files.copy(backing.toPath, tmpFile.toPath)
-          tmpFile.renameTo(cached)
-          cached
-        } else throw new RuntimeException(s"File missing in backing dir: $backing")
+          download(backing, cached)
+        } else Future.failed(new RuntimeException(s"File missing in backing dir: $backing"))
       }
     }
   }
@@ -142,16 +156,16 @@ class ResticRepository(
   def loadTree(id: Hash): Future[TreeBlob] =
     packIndex.flatMap(i => loadTree(i.lookup(id)))
   def loadTree(packEntry: PackEntry): Future[TreeBlob] =
-    readJson[TreeBlob](packFile(packEntry.packId), packEntry.offset, packEntry.length)
+    packFile(packEntry.packId).flatMap(readJson[TreeBlob](_, packEntry.offset, packEntry.length))
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
-    readJson[TreeBlob](packFile(pack), blob.offset, blob.length)
+    packFile(pack).flatMap(readJson[TreeBlob](_, blob.offset, blob.length))
 
   def loadBlob(id: Hash): Future[Array[Byte]] =
     packIndex.flatMap(i => loadBlob(i.lookup(id)))
   def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
-    readBlobFile(packFile(packEntry.packId), packEntry.offset, packEntry.length)
+    packFile(packEntry.packId).flatMap(readBlobFile(_, packEntry.offset, packEntry.length))
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
-    readBlobFile(packFile(pack), blob.offset, blob.length)
+    packFile(pack).flatMap(readBlobFile(_, blob.offset, blob.length))
 
   def loadIndex(file: File): Future[IndexFile] =
     readJson[IndexFile](file)
