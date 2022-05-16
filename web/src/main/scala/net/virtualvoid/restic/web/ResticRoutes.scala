@@ -12,6 +12,8 @@ class ResticRoutes(reader: ResticRepository) {
   import TwirlSupport._
   import reader.system.dispatcher
 
+  lazy val snapshots = reader.allSnapshots()
+
   lazy val main = concat(
     routes,
     auxiliary
@@ -51,7 +53,7 @@ class ResticRoutes(reader: ResticRepository) {
           )
         },
         (pathPrefix("host" / Segment / Segments) & pathEndOrSingleSlash) { (host, segments) =>
-          onSuccess(reader.allSnapshots()) { snaps =>
+          onSuccess(snapshots) { snaps =>
             val thoseSnaps = snaps.filter(_.hostname == host)
 
             val branchesF = MergedTreeNode.lookupNode(segments, reader, thoseSnaps)
