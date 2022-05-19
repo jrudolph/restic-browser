@@ -16,28 +16,26 @@ import scala.concurrent.{ Await, Future }
 import scala.util.Try
 
 object ResticRepository {
-  def open(repoDir: File, cacheBaseDir: File)(implicit system: ActorSystem): Option[ResticRepository] = {
+  def open(settings: ResticSettings)(implicit system: ActorSystem): Option[ResticRepository] = {
     def prompt(): String = {
-      Console.err.println(s"Enter password for repo at $repoDir:")
+      Console.err.println(s"Enter password for repo at ${settings.repositoryDir}:")
       Try(new String(System.console().readPassword()))
         .getOrElse(throw new IllegalArgumentException("Couldn't read password from shell or RESTIC_PASSWORD_FILE"))
     }
-    def loadPasswordFile(fileName: String): String = scala.io.Source.fromFile(fileName).mkString.trim
+    def loadPasswordFile(fileName: File): String = scala.io.Source.fromFile(fileName).mkString.trim
     val pass =
-      Try(system.settings.config.getString("restic.password-file"))
-        .toOption
-        .orElse(sys.env.get("RESTIC_PASSWORD_FILE"))
+      settings.repositoryPasswordFile
         .map(loadPasswordFile)
         .getOrElse(prompt)
-    openRepository(repoDir, cacheBaseDir, pass)
+    openRepository(settings, pass)
   }
-  def openRepository(repoDir: File, cacheBaseDir: File, password: String)(implicit system: ActorSystem): Option[ResticRepository] = {
-    val keyDir = new File(repoDir, "keys")
+  def openRepository(settings: ResticSettings, password: String)(implicit system: ActorSystem): Option[ResticRepository] = {
+    val keyDir = new File(settings.repositoryDir, "keys")
     val allKeys = allFiles(keyDir)
     allKeys
       .flatMap(readJsonPlain[Key](_).tryDecrypt(password))
       .headOption
-      .map(mk => new ResticRepository(repoDir, mk, cacheBaseDir))
+      .map(mk => new ResticRepository(settings, mk))
   }
 
   def allFiles(dir: File): immutable.Iterable[File] = {
@@ -59,23 +57,24 @@ object ResticRepository {
 }
 
 class ResticRepository(
-    val repoDir:  File,
-    masterKey:    MasterKey,
-    cacheBaseDir: File)(implicit val system: ActorSystem) {
+    settings:  ResticSettings,
+    masterKey: MasterKey)(implicit val system: ActorSystem) {
+  def repoDir: File = settings.repositoryDir
+
   import system.dispatcher
   val keySpec = new SecretKeySpec(masterKey.encrypt.bytes, "AES")
   val decryptor = ThreadLocal.withInitial(() => new Decryptor(keySpec))
 
   private var mappedFiles: Map[File, MappedByteBuffer] = Map.empty
 
-  val configFile = new File(repoDir, "config")
+  val configFile = new File(settings.repositoryDir, "config")
   val repoConfig = Await.result(readJson[Config](configFile), 3.seconds)
   lazy val repoId = repoConfig.id
   Console.err.println(s"Successfully opened repo $repoId at $repoDir")
 
-  val resticCacheDir = new File(s"${sys.env("HOME")}/.cache/restic/$repoId")
+  val resticCacheDir = new File(settings.userCache, repoId)
   val localCacheDir = {
-    val res = new File(cacheBaseDir, repoId)
+    val res = new File(settings.localCache, repoId)
     res.mkdirs()
     res
   }

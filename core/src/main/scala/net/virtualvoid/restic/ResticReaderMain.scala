@@ -42,7 +42,7 @@ object ResticReaderMain extends App {
   val backingDir = new File("/tmp/restic-repo")
   val cacheBaseDir = new File("../restic-cache")
 
-  val reader = ResticRepository.open(backingDir, cacheBaseDir).get
+  val reader = ResticRepository.open(ResticSettings()).get
 
   import reader.loadTree
 

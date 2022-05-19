@@ -4,19 +4,12 @@ package web
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
 
-import java.io.File
-
 object ResticBrowserMain extends App {
   implicit val system = ActorSystem()
   import system.dispatcher
 
-  val repoDir = new File("/tmp/restic-repo")
-  val cacheDir = {
-    val res = new File("../restic-cache")
-    res.mkdirs()
-    res
-  }
-  val reader = ResticRepository.open(repoDir, cacheDir).getOrElse(throw new RuntimeException(s"Couldn't open repository at $repoDir"))
+  val settings = ResticSettings()
+  val reader = ResticRepository.open(settings).getOrElse(throw new RuntimeException(s"Couldn't open repository at ${settings.repositoryDir}"))
 
   val binding =
     Http().newServerAt("localhost", 8080)
