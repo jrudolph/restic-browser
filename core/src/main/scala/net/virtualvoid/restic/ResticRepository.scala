@@ -1,14 +1,17 @@
 package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.Source
+import akka.stream.{ ActorAttributes, Attributes }
+import akka.stream.scaladsl.{ Sink, Source, StreamConverters }
+import akka.util.ByteString
 import spray.json._
 
-import java.io.File
+import java.io.{ BufferedOutputStream, File }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
 import java.nio.{ ByteBuffer, MappedByteBuffer }
+import java.util.zip.{ ZipEntry, ZipOutputStream }
 import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable
 import scala.concurrent.duration._
@@ -182,4 +185,40 @@ class ResticRepository(
   val indexDir = new File(resticCacheDir, "index")
   val snapshotDir = new File(resticCacheDir, "snapshots")
   val dataDir = new File(resticCacheDir, "data")
+
+  def asZip(hash: Hash): Source[ByteString, Future[Any]] =
+    StreamConverters.asOutputStream().addAttributes(Attributes(ActorAttributes.Dispatcher("akka.actor.default-dispatcher")))
+      .mapMaterializedValue { os =>
+        val zipStream = new ZipOutputStream(new BufferedOutputStream(os, 1000000))
+        zipStream.setLevel(0)
+
+        def walk(hash: Hash, pathPrefix: String): Source[(String, TreeLeaf), Any] =
+          Source.futureSource(
+            loadTree(hash)
+              .map { b =>
+                val leafs = b.nodes.collect { case l: TreeLeaf => (pathPrefix + l.name) -> l }
+                val subtrees = b.nodes.collect { case b: TreeBranch => walk(b.subtree, pathPrefix + b.name + "/") }
+                Source(leafs).concat(Source(subtrees).flatMapConcat(identity))
+              }
+          )
+
+        walk(hash, "")
+          .mapAsync(1) {
+            case (path, leaf) =>
+              // stream leaf into zipStream
+              val entry = new ZipEntry(path)
+              entry.setSize(leaf.size.getOrElse(0))
+              zipStream.putNextEntry(entry)
+
+              Source(leaf.content)
+                .mapAsync(8)(loadBlob)
+                .mapAsync(1)(b => Future(zipStream.write(b)))
+                .runWith(Sink.ignore)
+          }
+          .runWith(Sink.ignore)
+          .transform { x =>
+            zipStream.close() // FIXME: fail on failure
+            x
+          }
+      }
 }

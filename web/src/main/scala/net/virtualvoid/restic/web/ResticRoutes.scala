@@ -1,6 +1,8 @@
 package net.virtualvoid.restic
 package web
 
+import akka.http.scaladsl.model.headers.ContentDispositionTypes
+import akka.http.scaladsl.model.{ ContentTypes, HttpEntity, headers }
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 
@@ -28,12 +30,19 @@ class ResticRoutes(reader: ResticRepository) {
           }
         },
         pathPrefix("blob" / Segment) { h =>
+          val hash = Hash(h)
           concat(
             pathEnd {
-              val hash = Hash(h)
-              val tF = reader.loadTree(hash)
-              onSuccess(tF) { t =>
-                complete(html.tree(hash, t))
+              parameter("zip".?) {
+                case None =>
+                  val tF = reader.loadTree(hash)
+                  onSuccess(tF) { t =>
+                    complete(html.tree(hash, t))
+                  }
+                case Some(_) =>
+                  respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> (h.take(16) + ".zip")))) {
+                    complete(HttpEntity(ContentTypes.`application/octet-stream`, reader.asZip(hash)))
+                  }
               }
             },
             path(Segment) { fileName =>
