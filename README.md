@@ -10,6 +10,12 @@ This project provides a web-based read-only interface to browse a [restic](https
 ## Non-goals
  * Be a full-fledged alternative for accessing a restic repositories (use the official tool instead)
 
+## Features
+
+ * Browse backup set
+ * Browse merged tree making it easy to spot files deleted in latter snapshots
+ * Download directory revisions as zip
+
 ## Security implications
 
 Restic repositories are fully encrypted and the official restic application is careful to avoid sharing too
