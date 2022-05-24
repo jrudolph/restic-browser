@@ -33,6 +33,7 @@ object ResticRepository {
     openRepository(settings, pass)
   }
   def openRepository(settings: ResticSettings, password: String)(implicit system: ActorSystem): Option[ResticRepository] = {
+    Console.err.println(s"Trying to open repository at ${settings.repositoryDir}")
     val keyDir = new File(settings.repositoryDir, "keys")
     val allKeys = allFiles(keyDir)
     allKeys
