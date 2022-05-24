@@ -90,8 +90,8 @@ class ResticRepository(
     else Index.createIndex(packIndexFile, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(ResticRepository.allFiles(indexDir))
-      .mapAsync(16)(f => loadIndex(f))
+    Source(ResticRepository.allFiles(new File(repoDir, "index")))
+      .mapAsync(1024)(f => loadIndex(Hash(f.getName)))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
       }
@@ -126,10 +126,14 @@ class ResticRepository(
         case Some(f) => f
         case None =>
           val f = Future {
+            val start = System.nanoTime()
+            Console.err.println(s"Downloading $from into cache")
             val tmpFile = File.createTempFile(to.getName.take(20) + "-", ".tmp", to.getParentFile)
             tmpFile.delete()
             Files.copy(from.toPath, tmpFile.toPath)
             tmpFile.renameTo(to)
+            val lastedMillis = (System.nanoTime() - start) / 1000000
+            Console.err.println(f"Downloading $from into cache finished in $lastedMillis%5d ms size: ${to.length() / 1000}%5d kB speed: ${to.length().toFloat / lastedMillis}%5.0f kB/s")
             to
           }
           downloads += from -> f
@@ -137,17 +141,22 @@ class ResticRepository(
       }
     }
 
-  def packFile(id: Hash): Future[File] = {
+  def packFile(id: Hash): Future[File] =
+    repoFile("data", id)
+
+  def repoFile(kind: String, id: Hash, simpleBackingFormat: Boolean = false): Future[File] = {
     import FileExtension._
 
-    val path = s"${id.toString.take(2)}/$id"
-    val res = new File(dataDir, path).resolved
+    val res = new File(resticCacheDir, s"$kind/${id.toString.take(2)}/$id").resolved
     if (res.exists()) Future.successful(res)
     else {
-      val cached = new File(localCacheDir, "data/" + path).resolved
+      val cached = new File(localCacheDir, s"$kind/${id.toString.take(2)}/$id").resolved
       if (cached.exists()) Future.successful(cached)
       else {
-        val backing = new File(repoDir, "data/" + path).resolved
+        val p =
+          if (simpleBackingFormat) s"$kind/$id"
+          else s"$kind/${id.toString.take(2)}/$id"
+        val backing = new File(repoDir, p).resolved
         if (repoDir.exists()) {
           cached.getParentFile.mkdirs()
           download(backing, cached)
@@ -170,22 +179,20 @@ class ResticRepository(
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
     packFile(pack).flatMap(readBlobFile(_, blob.offset, blob.length))
 
-  def loadIndex(file: File): Future[IndexFile] =
-    readJson[IndexFile](file)
+  def loadIndex(id: Hash): Future[IndexFile] =
+    repoFile("index", id, simpleBackingFormat = true).flatMap(readJson[IndexFile](_))
 
-  def loadSnapshot(file: File): Future[Snapshot] =
-    readJson[Snapshot](file)
+  def loadSnapshot(id: Hash): Future[Snapshot] =
+    repoFile("snapshots", id, simpleBackingFormat = true).flatMap(readJson[Snapshot](_))
 
   def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
     readBlobFile(file, offset, length)
       .map(data => new String(data, "utf8").parseJson.convertTo[T])
 
-  def allSnapshots(): Future[Seq[Snapshot]] =
-    Future.traverse(ResticRepository.allFiles(snapshotDir).toVector)(loadSnapshot)
-
-  val indexDir = new File(resticCacheDir, "index")
-  val snapshotDir = new File(resticCacheDir, "snapshots")
-  val dataDir = new File(resticCacheDir, "data")
+  def allSnapshots(): Source[(Hash, Snapshot), Any] =
+    Source(ResticRepository.allFiles(new File(repoDir, "snapshots")).toVector)
+      .map(f => repoDir.toPath.relativize(f.toPath).toFile)
+      .mapAsync(16)(f => loadSnapshot(Hash(f.getName)).map(Hash(f.getName) -> _))
 
   def asZip(hash: Hash): Source[ByteString, Future[Any]] =
     StreamConverters.asOutputStream().addAttributes(Attributes(ActorAttributes.Dispatcher("akka.actor.default-dispatcher")))

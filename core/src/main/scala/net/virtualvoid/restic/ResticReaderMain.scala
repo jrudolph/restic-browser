@@ -128,7 +128,8 @@ object ResticReaderMain extends App {
   def benchSync[T](desc: String)(f: => T): T = bench[T](desc)(Future.successful(f)).value.get.get
 
   def snapshotStats: Unit =
-    Future.traverse(ResticRepository.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(f.getName -> _))
+    reader.allSnapshots()
+      .runWith(Sink.seq)
       .foreach { snaps =>
         snaps.toVector.sortBy(_._2.time).foreach { s =>
           println(s._1, s._2.time, s._2.hostname, s._2.paths, s._2.tags)
@@ -145,9 +146,8 @@ object ResticReaderMain extends App {
       }
     }
   def snapshotBackRefs(): Future[Seq[(Hash, SnapshotReference)]] =
-    Source(ResticRepository.allFiles(reader.snapshotDir))
-      .mapAsync(16)(f => reader.loadSnapshot(f).map(f.getName -> _))
-      .map(s => s._2.tree -> SnapshotReference(Hash(s._1)))
+    reader.allSnapshots()
+      .map(s => s._2.tree -> SnapshotReference(s._1))
       .runWith(Sink.seq[(Hash, SnapshotReference)])
 
   val backrefIndexFile = new File(reader.localCacheDir, "backrefs.idx")
@@ -208,7 +208,7 @@ object ResticReaderMain extends App {
 
       val snaps: Map[Hash, Snapshot] =
         Await.result(
-          Future.traverse(ResticRepository.allFiles(reader.snapshotDir))(f => reader.loadSnapshot(f).map(Hash(f.getName) -> _)),
+          reader.allSnapshots().runWith(Sink.seq),
           10.seconds).toMap
 
       def lookupRef(t: TreeReference): Future[TreeNode] = loadTree(t.treeBlobId).map(_.nodes(t.idx))
@@ -339,8 +339,8 @@ object ResticReaderMain extends App {
           else Future.successful(Vector.empty)
 
         def fastChains: Source[(Hash, Chain), Any] =
-          Source(ResticRepository.allFiles(reader.snapshotDir))
-            .mapAsync(1024)(f => reader.loadSnapshot(f).map(s => SnapshotNode(Hash(f.getName), s)))
+          reader.allSnapshots()
+            .map { case (h, s) => SnapshotNode(h, s) }
             .mapAsync(1024)(snap => collectChains(snap.node.tree, snap :: Nil))
             .mapConcat(identity)
 

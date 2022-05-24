@@ -5,6 +5,7 @@ import akka.http.scaladsl.model.headers.ContentDispositionTypes
 import akka.http.scaladsl.model.{ ContentTypes, HttpEntity, headers }
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
+import akka.stream.scaladsl.Sink
 
 import scala.concurrent.Future
 
@@ -12,6 +13,7 @@ case class SnapshotInfo(host: String, paths: Set[String], tags: Set[String], sna
 
 class ResticRoutes(reader: ResticRepository) {
   import TwirlSupport._
+  import reader.system
   import reader.system.dispatcher
 
   lazy val snapshots = reader.allSnapshots()
@@ -62,7 +64,9 @@ class ResticRoutes(reader: ResticRepository) {
           )
         },
         (pathPrefix("host" / Segment / Segments) & pathEndOrSingleSlash) { (host, segments) =>
-          onSuccess(snapshots) { snaps =>
+          val snapsF = snapshots.runWith(Sink.seq)
+          onSuccess(snapsF) { snaps0 =>
+            val snaps = snaps0.map(_._2)
             val thoseSnaps = snaps.filter(_.hostname == host)
 
             val branchesF = MergedTreeNode.lookupNode(segments, reader, thoseSnaps)
@@ -108,8 +112,9 @@ class ResticRoutes(reader: ResticRepository) {
 
   def snapshotInfos: Future[Seq[SnapshotInfo]] =
     reader.allSnapshots()
+      .runWith(Sink.seq)
       .map { snaps =>
-        snaps.groupBy(s => (s.hostname, s.paths.toSet, s.flatTags.toSet))
+        snaps.map(_._2).groupBy(s => (s.hostname, s.paths.toSet, s.flatTags.toSet))
           .map {
             case ((host, paths, tags), snaps) => SnapshotInfo(host, paths, tags, snaps)
           }
