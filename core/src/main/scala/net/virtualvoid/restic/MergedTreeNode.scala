@@ -3,6 +3,7 @@ package net.virtualvoid.restic
 import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
 import scala.concurrent.Future
 import MergedTreeNode.convertToInterval
+import akka.stream.scaladsl.{ Sink, Source }
 
 case class PathRevision(snapshots: Seq[Snapshot], treeBlobId: Hash, node: TreeNode) {
   def firstSeen: ZonedDateTime = snapshots.map(_.time).min
@@ -67,33 +68,37 @@ object MergedTreeNode {
     )
   }
   def lookupChildren(node: MergedTreeNode, repo: ResticRepository): Future[Seq[MergedTreeNode]] = {
+    import repo.system
     import repo.system.dispatcher
-    Future.traverse(node.nestedRevisions.collect { case PathRevision(snaps, _, b: TreeBranch) => b.subtree -> snaps }) {
-      case (treeBlobId, snaps) =>
-        repo.loadTree(treeBlobId).map(b => (treeBlobId, b, snaps))
-    }.map { blobSnaps =>
-      blobSnaps.flatMap {
-        case (treeBlobId, blob, snaps) =>
-          blob.nodes
-            .map { node =>
-              MergedTreeNode(node.name, Seq(PathRevision(snaps, treeBlobId, node)))
-            }
+    Source(node.nestedRevisions.collect { case PathRevision(snaps, _, b: TreeBranch) => b.subtree -> snaps })
+      .mapAsync(1024) {
+        case (treeBlobId, snaps) =>
+          repo.loadTree(treeBlobId).map(b => (treeBlobId, b, snaps))
       }
-        .groupBy(_.name)
-        .map {
-          case (n, merged) => MergedTreeNode(
-            n,
-            merged.flatMap(_.nestedRevisions)
-              .groupBy(_.node match { case b: TreeBranch => b.subtree; case l: TreeLeaf => l.content; case l: TreeLink => l.linktarget })
-              .map {
-                case (_, revs) =>
-                  PathRevision(revs.flatMap(_.snapshots), revs.head.treeBlobId, revs.head.node)
+      .runWith(Sink.seq)
+      .map { blobSnaps =>
+        blobSnaps.flatMap {
+          case (treeBlobId, blob, snaps) =>
+            blob.nodes
+              .map { node =>
+                MergedTreeNode(node.name, Seq(PathRevision(snaps, treeBlobId, node)))
               }
-              .toVector
-          )
         }
-        .toVector
-    }
+          .groupBy(_.name)
+          .map {
+            case (n, merged) => MergedTreeNode(
+              n,
+              merged.flatMap(_.nestedRevisions)
+                .groupBy(_.node match { case b: TreeBranch => b.subtree; case l: TreeLeaf => l.content; case l: TreeLink => l.linktarget })
+                .map {
+                  case (_, revs) =>
+                    PathRevision(revs.flatMap(_.snapshots), revs.head.treeBlobId, revs.head.node)
+                }
+                .toVector
+            )
+          }
+          .toVector
+      }
   }
 
   def convertToInterval(dt: ZonedDateTime): String = {
