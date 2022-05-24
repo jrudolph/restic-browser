@@ -28,16 +28,6 @@ In particular:
 
 ## Usage
 
-### From Docker
-
-You need to mount 
-
-```
-docker run --rm -ti -p 8080:8080 -v <repository>:/repo:ro -v $HOME/.cache/restic:/restic-cache:ro jrudolph/restic-reader
-```
-
-Then open to https://localhost:8080.
-
 ### With Plain Java
 
 You need at least Java 11.
