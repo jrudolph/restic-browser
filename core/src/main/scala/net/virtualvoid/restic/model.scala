@@ -4,10 +4,9 @@ import com.lambdaworks.crypto.SCrypt
 import spray.json._
 
 import java.nio.ByteBuffer
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.time.{ Instant, ZonedDateTime }
 import java.util.Base64
-import java.util.Formatter.DateTime
 import javax.crypto.spec.SecretKeySpec
 import scala.annotation.tailrec
 import scala.util.Try
@@ -77,7 +76,7 @@ object Hash {
   private val simpleHashFormat: JsonFormat[Hash] =
     // use truncated hashes for lesser memory usage
     JsonExtra.deriveFormatFrom[String].apply[Hash](_.toString, apply(_))
-  implicit val hashFormat: JsonFormat[Hash] = DeduplicationCache.cachedFormat(simpleHashFormat)
+  implicit val hashFormat: JsonFormat[Hash] = simpleHashFormat
 }
 
 sealed trait BlobType
@@ -100,7 +99,7 @@ object CachedName {
 
   import spray.json.DefaultJsonProtocol._
   private val simpleCachedNameFormat: JsonFormat[CachedName.T] = JsonExtra.deriveFormatFrom[String].apply[T](identity, x => x.asInstanceOf[T])
-  implicit val hashFormat: JsonFormat[CachedName.T] = DeduplicationCache.cachedFormat(simpleCachedNameFormat)
+  implicit val hashFormat: JsonFormat[CachedName.T] = simpleCachedNameFormat
 }
 
 sealed trait TreeNode extends Product {
