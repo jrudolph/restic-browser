@@ -1,22 +1,22 @@
 package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.{Sink, Source, StreamConverters}
+import akka.stream.scaladsl.{ Sink, Source, StreamConverters }
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
 
-import java.io.{BufferedOutputStream, File, FileInputStream, FileOutputStream}
+import java.io.{ BufferedOutputStream, File, FileInputStream, FileOutputStream }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
-import java.nio.{ByteBuffer, MappedByteBuffer}
+import java.nio.{ ByteBuffer, MappedByteBuffer }
 import java.util.concurrent.Executors
-import java.util.zip.{ZipEntry, ZipOutputStream}
+import java.util.zip.{ ZipEntry, ZipOutputStream }
 import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable
 import scala.concurrent.duration._
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{ Await, ExecutionContext, Future }
 import scala.util.Try
 
 object ResticRepository {
@@ -88,7 +88,7 @@ class ResticRepository(
   def repoDir: File = settings.repositoryDir
 
   import system.dispatcher
-  val copyExecutor = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(100))
+  val copyExecutor = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(8))
   val keySpec = new SecretKeySpec(masterKey.encrypt.bytes, "AES")
   val decryptor = ThreadLocal.withInitial(() => new Decryptor(keySpec))
 
@@ -174,7 +174,7 @@ class ResticRepository(
             val lastedMillis = (System.nanoTime() - start) / 1000000
             Console.err.println(f"Downloading $from into cache finished in $lastedMillis%5d ms size: ${to.length() / 1000}%5d kB speed: ${to.length().toFloat / lastedMillis}%5.0f kB/s")
             to
-          }
+          }(copyExecutor)
           downloads += from -> f
           f
       }
@@ -245,12 +245,11 @@ class ResticRepository(
   def loadTree(id: Hash): Future[TreeBlob] =
     packIndex.flatMap(i => loadTree(i.lookup(id)))
 
-  def packData(packEntry: PackEntry): Future[FileLocation] =
-    settings.cacheStrategy match {
+  def packData(packEntry: PackEntry, alwaysCachePack: Boolean = false): Future[FileLocation] =
+    (if (alwaysCachePack) CacheStrategy.Pack else settings.cacheStrategy) match {
       case CacheStrategy.Pack =>
         packFile(packEntry.packId).map(f => FileLocation(f, packEntry.offset, packEntry.length))
       case CacheStrategy.Part =>
-        println(s"Looking for ${packEntry.id} at ${packEntry.packId} ${packEntry.offset}")
         localRepoFile("data", packEntry.packId) match {
           case Some(f) => Future.successful(FileLocation(f, packEntry.offset, packEntry.length))
           case None =>
@@ -259,14 +258,15 @@ class ResticRepository(
                 val p = s"data/${id.toString.take(2)}/$id"
                 val backing = new File(repoDir, p)
                 require(backing.exists(), s"Backing file missing in repo: ${backing}")
-                println(s"Preparing to download for ${packEntry.id} at ${packEntry.packId} ${packEntry.offset}")
                 downloadPath(backing, entry.offset, entry.length, cached)
               }).map(FileLocation.fullFile)
         }
     }
 
   def loadTree(packEntry: PackEntry): Future[TreeBlob] =
-    packData(packEntry).flatMap(readJson[TreeBlob](_, CompressionType(packEntry.uncompressed_length)))
+    // trees will be packed together so cache full pack
+    packData(packEntry, alwaysCachePack = true)
+      .flatMap(readJson[TreeBlob](_, CompressionType(packEntry.uncompressed_length)))
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
     loadTree(blob.toEntryOf(pack))
 
@@ -336,7 +336,7 @@ class ResticRepository(
           }
           .mapAsync(128) {
             case ze: ZipEntry => Future.successful(ze)
-            case h: Hash => loadBlob(h)
+            case h: Hash      => loadBlob(h)
           }
           .map {
             case ze: ZipEntry =>
