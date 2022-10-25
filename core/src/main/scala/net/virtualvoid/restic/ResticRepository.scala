@@ -2,7 +2,6 @@ package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Sink, Source, StreamConverters}
-import akka.stream.{ActorAttributes, Attributes}
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
@@ -312,9 +311,9 @@ class ResticRepository(
       .mapAsync(16)(f => loadSnapshot(Hash(f.getName)).map(Hash(f.getName) -> _))
 
   def asZip(hash: Hash): Source[ByteString, Future[Any]] =
-    StreamConverters.asOutputStream().addAttributes(Attributes(ActorAttributes.Dispatcher("akka.actor.default-dispatcher")))
+    StreamConverters.asOutputStream(60.seconds)
       .mapMaterializedValue { os =>
-        val zipStream = new ZipOutputStream(new BufferedOutputStream(os, 1000000))
+        val zipStream = new ZipOutputStream(new BufferedOutputStream(os, 10000))
         zipStream.setLevel(0)
 
         def walk(hash: Hash, pathPrefix: String): Source[(String, TreeLeaf), Any] =
@@ -328,17 +327,23 @@ class ResticRepository(
           )
 
         walk(hash, "")
-          .mapAsync(1) {
+          .mapConcat {
             case (path, leaf) =>
               // stream leaf into zipStream
               val entry = new ZipEntry(path)
               entry.setSize(leaf.size.getOrElse(0))
-              zipStream.putNextEntry(entry)
-
-              Source(leaf.content)
-                .mapAsync(8)(loadBlob)
-                .mapAsync(1)(b => Future(zipStream.write(b)))
-                .runWith(Sink.ignore)
+              Seq(entry) ++ leaf.content
+          }
+          .mapAsync(128) {
+            case ze: ZipEntry => Future.successful(ze)
+            case h: Hash => loadBlob(h)
+          }
+          .map {
+            case ze: ZipEntry =>
+              zipStream.flush()
+              zipStream.putNextEntry(ze)
+            case b: Array[Byte] =>
+              zipStream.write(b)
           }
           .runWith(Sink.ignore)
           .transform { x =>
