@@ -5,11 +5,20 @@ import com.typesafe.config.Config
 
 import java.io.File
 
+sealed trait CacheStrategy
+object CacheStrategy {
+  /** Cache full packs */
+  case object Pack extends CacheStrategy
+  /** Cache parts of packs */
+  case object Part extends CacheStrategy
+}
+
 case class ResticSettings(
     repositoryDir:          File,
     userCache:              File,
     localCache:             File,
-    repositoryPasswordFile: Option[File]
+    repositoryPasswordFile: Option[File],
+    cacheStrategy:          CacheStrategy
 )
 
 object ResticSettings {
@@ -28,7 +37,12 @@ object ResticSettings {
       repositoryDir = existingFile("repository"),
       userCache = file("user-cache-dir"),
       localCache = file("cache-dir"),
-      repositoryPasswordFile = if (conf.hasPath("password-file")) Some(existingFile("password-file")) else None
+      repositoryPasswordFile = if (conf.hasPath("password-file")) Some(existingFile("password-file")) else None,
+      cacheStrategy = conf.getString("cache-strategy") match {
+        case "pack" => CacheStrategy.Pack
+        case "part" => CacheStrategy.Part
+        case s      => throw new IllegalArgumentException(s"Unknown cache-strategy '$s'")
+      }
     )
   }
 }

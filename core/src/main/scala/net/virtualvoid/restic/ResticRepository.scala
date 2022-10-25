@@ -1,23 +1,23 @@
 package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
-import akka.stream.{ ActorAttributes, Attributes }
-import akka.stream.scaladsl.{ Sink, Source, StreamConverters }
+import akka.stream.scaladsl.{Sink, Source, StreamConverters}
+import akka.stream.{ActorAttributes, Attributes}
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
-import net.virtualvoid.restic.ResticRepository.CompressionType
 import spray.json._
 
-import java.io.{ BufferedOutputStream, File }
+import java.io.{BufferedOutputStream, File, FileInputStream, FileOutputStream}
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
-import java.nio.{ ByteBuffer, MappedByteBuffer }
-import java.util.zip.{ ZipEntry, ZipOutputStream }
+import java.nio.{ByteBuffer, MappedByteBuffer}
+import java.util.concurrent.Executors
+import java.util.zip.{ZipEntry, ZipOutputStream}
 import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable
 import scala.concurrent.duration._
-import scala.concurrent.{ Await, Future }
+import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.Try
 
 object ResticRepository {
@@ -73,14 +73,23 @@ object ResticRepository {
         case None    => Uncompressed
       }
   }
+
+  case class FileLocation(file: File, offset: Long, length: Int)
+  object FileLocation {
+    implicit def fullFile(file: File): FileLocation =
+      FileLocation(file, 0, -1)
+  }
 }
 
 class ResticRepository(
     settings:  ResticSettings,
     masterKey: MasterKey)(implicit val system: ActorSystem) {
+  import ResticRepository._
+
   def repoDir: File = settings.repositoryDir
 
   import system.dispatcher
+  val copyExecutor = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(100))
   val keySpec = new SecretKeySpec(masterKey.encrypt.bytes, "AES")
   val decryptor = ThreadLocal.withInitial(() => new Decryptor(keySpec))
 
@@ -121,8 +130,8 @@ class ResticRepository(
         buffer
     }
   }
-  def readBlobFile(file: File, offset: Long = 0, length: Int = -1, uncompressed: Option[Int]): Future[Array[Byte]] =
-    readBlobFilePlain(file, offset, length)
+  def readBlobFile(location: FileLocation, uncompressed: Option[Int]): Future[Array[Byte]] =
+    readBlobFilePlain(location)
       .map(decryptBlob)
       .map(decompress(uncompressed))
 
@@ -139,9 +148,10 @@ class ResticRepository(
     } else
       compressedData
 
-  def readBlobFilePlain(file: File, offset: Long = 0, length: Int = -1): Future[ByteBuffer] = Future {
+  def readBlobFilePlain(location: FileLocation): Future[ByteBuffer] = Future {
+    import location._
     val mapped = mappedFileFor(file).duplicate()
-    val len =
+    val len = // FIXME: move to FileLocation
       if (length == -1) (file.length() - offset).toInt
       else length
     mapped.position(offset.toInt).limit(offset.toInt + len)
@@ -170,44 +180,103 @@ class ResticRepository(
           f
       }
     }
+  def downloadPath(from: File, offset: Long, length: Int, to: File): Future[File] =
+    Future {
+      println(s"Downloading from ${from} at $offset len: $length")
+      val buffer = new Array[Byte](65536)
+      val fis = new FileInputStream(from)
+      fis.skip(offset)
+      val tmpFile = File.createTempFile(to.getName.take(20) + "-", ".tmp", to.getParentFile)
+      tmpFile.delete()
+      val fos = new FileOutputStream(tmpFile)
+      var remaining = length
+      while (remaining > 0) {
+        val read = fis.read(buffer, 0, math.min(buffer.length, remaining))
+        fos.write(buffer, 0, read)
+        remaining -= read
+      }
+      fos.close()
+      fis.close()
+      tmpFile.renameTo(to)
+      require(to.length() == length, s"Copied file should have length ${length} but had ${to.length()}")
+      to
+    }(copyExecutor)
 
   def packFile(id: Hash): Future[File] =
     repoFile("data", id)
 
-  def repoFile(kind: String, id: Hash, simpleBackingFormat: Boolean = false): Future[File] = {
+  def localRepoFile(kind: String, id: Hash): Option[File] =
+    localRepoFile[String](kind, id, "", _ => "")
+  def localRepoFile[T](kind: String, id: Hash, extra: T, extraPath: T => String): Option[File] = {
     import FileExtension._
 
     val res = new File(resticCacheDir, s"$kind/${id.toString.take(2)}/$id").resolved
-    if (res.exists()) Future.successful(res)
+    if (res.exists()) Some(res)
     else {
-      val cached = new File(localCacheDir, s"$kind/${id.toString.take(2)}/$id").resolved
-      if (cached.exists()) Future.successful(cached)
-      else {
-        val p =
-          if (simpleBackingFormat) s"$kind/$id"
-          else s"$kind/${id.toString.take(2)}/$id"
-        val backing = new File(repoDir, p).resolved
-        if (repoDir.exists()) {
-          cached.getParentFile.mkdirs()
-          download(backing, cached)
-        } else Future.failed(new RuntimeException(s"File missing in backing dir: $backing"))
-      }
+      val cached = new File(localCacheDir, s"$kind/${id.toString.take(2)}/$id${extraPath(extra)}").resolved
+      if (cached.exists()) Some(cached)
+      else None
+    }
+  }
+
+  def repoFile(kind: String, id: Hash, simpleBackingFormat: Boolean = false): Future[File] =
+    repoFile[String](kind, id, extra = "", _ => "", (kind, id, _, cached) => {
+      import FileExtension._
+      val p =
+        if (simpleBackingFormat) s"$kind/$id"
+        else s"$kind/${id.toString.take(2)}/$id"
+      val backing = new File(repoDir, p).resolved
+      if (repoDir.exists()) {
+        cached.getParentFile.mkdirs()
+        download(backing, cached)
+      } else Future.failed(new RuntimeException(s"File missing in backing dir: $backing"))
+    })
+  def repoFile[T](kind: String, id: Hash, extra: T, extraPath: T => String, retrieve: (String, Hash, T, File) => Future[File]): Future[File] = {
+    import FileExtension._
+
+    localRepoFile(kind, id, extra, extraPath) match {
+      case Some(v) => Future.successful(v)
+      case None =>
+        val cached = new File(localCacheDir, s"$kind/${id.toString.take(2)}/$id${extraPath(extra)}").resolved // DRY with localRepoFile
+        cached.getParentFile.mkdirs()
+        retrieve(kind, id, extra, cached)
     }
   }
 
   def loadTree(id: Hash): Future[TreeBlob] =
     packIndex.flatMap(i => loadTree(i.lookup(id)))
+
+  def packData(packEntry: PackEntry): Future[FileLocation] =
+    settings.cacheStrategy match {
+      case CacheStrategy.Pack =>
+        packFile(packEntry.packId).map(f => FileLocation(f, packEntry.offset, packEntry.length))
+      case CacheStrategy.Part =>
+        println(s"Looking for ${packEntry.id} at ${packEntry.packId} ${packEntry.offset}")
+        localRepoFile("data", packEntry.packId) match {
+          case Some(f) => Future.successful(FileLocation(f, packEntry.offset, packEntry.length))
+          case None =>
+            repoFile[PackEntry]("part", packEntry.packId, packEntry, "_" + _.offset + ".part",
+              { (_, id, entry, cached) =>
+                val p = s"data/${id.toString.take(2)}/$id"
+                val backing = new File(repoDir, p)
+                require(backing.exists(), s"Backing file missing in repo: ${backing}")
+                println(s"Preparing to download for ${packEntry.id} at ${packEntry.packId} ${packEntry.offset}")
+                downloadPath(backing, entry.offset, entry.length, cached)
+              }).map(FileLocation.fullFile)
+        }
+    }
+
   def loadTree(packEntry: PackEntry): Future[TreeBlob] =
-    packFile(packEntry.packId).flatMap(readJson[TreeBlob](_, packEntry.offset, packEntry.length, CompressionType(packEntry.uncompressed_length)))
+    packData(packEntry).flatMap(readJson[TreeBlob](_, CompressionType(packEntry.uncompressed_length)))
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
-    packFile(pack).flatMap(readJson[TreeBlob](_, blob.offset, blob.length, CompressionType(blob.uncompressed_length)))
+    loadTree(blob.toEntryOf(pack))
 
   def loadBlob(id: Hash): Future[Array[Byte]] =
     packIndex.flatMap(i => loadBlob(i.lookup(id)))
   def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
-    packFile(packEntry.packId).flatMap(readBlobFile(_, packEntry.offset, packEntry.length, packEntry.uncompressed_length))
+    packData(packEntry).flatMap(readBlobFile(_, packEntry.uncompressed_length))
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
-    packFile(pack).flatMap(readBlobFile(_, blob.offset, blob.length, blob.uncompressed_length))
+    loadBlob(blob.toEntryOf(pack))
 
   def loadIndex(id: Hash): Future[IndexFile] =
     repoFile("index", id, simpleBackingFormat = true).flatMap(readJson[IndexFile](_))
@@ -215,8 +284,8 @@ class ResticRepository(
   def loadSnapshot(id: Hash): Future[Snapshot] =
     repoFile("snapshots", id, simpleBackingFormat = true).flatMap(readJson[Snapshot](_))
 
-  def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1, compressionType: CompressionType = CompressionType.Tagged): Future[T] =
-    readBlobFile(file, offset, length, uncompressed = None) // will be dealt with afterwards
+  def readJson[T: JsonFormat](location: FileLocation, compressionType: CompressionType = CompressionType.Tagged): Future[T] =
+    readBlobFile(location, uncompressed = None) // will be dealt with afterwards
       .map { data0 =>
         val (uncompressedSize, data1) = compressionType match {
           case CompressionType.Uncompressed  => (None, data0)

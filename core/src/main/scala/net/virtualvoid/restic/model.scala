@@ -159,6 +159,8 @@ case class PackBlob(
   def isTree: Boolean = `type` == BlobType.Tree
   def isData: Boolean = `type` == BlobType.Data
   def isCompressed: Boolean = uncompressed_length.isDefined
+  def toEntryOf(pack: Hash): PackEntry =
+    PackEntry(pack, id, `type`, offset, length, uncompressed_length)
 }
 case class PackIndex(
     id:    Hash,

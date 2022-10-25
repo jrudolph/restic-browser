@@ -25,7 +25,7 @@ object FileExtension {
       if (f.getName.length == 64) f // shortcut when full hashes are used
       else if (f.exists()) f
       else {
-        val cands = f.getParentFile.listFiles().filter(_.getName startsWith f.getName)
+        val cands = Option(f.getParentFile.listFiles()).toSeq.flatten.filter(_.getName startsWith f.getName)
         cands.size match {
           case 1 => cands.head
           case 0 => f // no resolution possible return original
