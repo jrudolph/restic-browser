@@ -11,13 +11,14 @@
 
 <h3>Contents (@{leaf.content.size} parts)</h3>
 <table>
-    <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th></tr>
+    <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th><th>Uncompressed Size</th></tr>
 @for(entry <- entries) {
     <tr>
         <td class="hash">@{entry.id.toString.take(16)}</td>
         <td class="hash">@{entry.packId.toString.take(16)}</td>
         <td class="num-cell">@{entry.offset}</td>
         <td class="num-cell">@{entry.length}</td>
+        <td class="num-cell">@{entry.uncompressed_length.map(_.toString).getOrElse("")}</td>
     </tr>
 }
 </table>

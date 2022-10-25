@@ -23,7 +23,8 @@ class IndexSpec extends AnyFreeSpec with Matchers with BeforeAndAfterAll with Sc
     val offset = random.nextInt(Int.MaxValue)
     val length = random.nextInt(Int.MaxValue)
     val tpe = if (random.nextBoolean()) BlobType.Tree else BlobType.Data
-    PackEntry(pack, target, tpe, offset, length)
+    val un = if (random.nextBoolean()) None else Some(random.nextInt(Int.MaxValue))
+    PackEntry(pack, target, tpe, offset, length, un)
   }
 
   def indexFor(data: Seq[PackEntry]): (Map[Hash, Seq[PackEntry]], Index[PackEntry]) = {

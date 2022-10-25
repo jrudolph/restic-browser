@@ -4,6 +4,8 @@ import akka.actor.ActorSystem
 import akka.stream.{ ActorAttributes, Attributes }
 import akka.stream.scaladsl.{ Sink, Source, StreamConverters }
 import akka.util.ByteString
+import io.airlift.compress.zstd.ZstdDecompressor
+import net.virtualvoid.restic.ResticRepository.CompressionType
 import spray.json._
 
 import java.io.{ BufferedOutputStream, File }
@@ -58,6 +60,19 @@ object ResticRepository {
 
   def readJsonPlain[T: JsonFormat](file: File): T =
     scala.io.Source.fromFile(file).mkString.parseJson.convertTo[T]
+
+  sealed trait CompressionType
+  object CompressionType {
+    case object Uncompressed extends CompressionType
+    case class Compressed(uncompressedLength: Int) extends CompressionType
+    case object Tagged extends CompressionType
+
+    def apply(compressed: Option[Int]): CompressionType =
+      compressed match {
+        case Some(l) => Compressed(l)
+        case None    => Uncompressed
+      }
+  }
 }
 
 class ResticRepository(
@@ -93,7 +108,7 @@ class ResticRepository(
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
       .mapAsync(1024)(f => loadIndex(Hash(f.getName)))
       .mapConcat { packIndex =>
-        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length)))
+        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
 
   private def mappedFileFor(file: File): MappedByteBuffer = synchronized {
@@ -106,8 +121,23 @@ class ResticRepository(
         buffer
     }
   }
-  def readBlobFile(file: File, offset: Long = 0, length: Int = -1): Future[Array[Byte]] =
-    readBlobFilePlain(file, offset, length).map(decryptBlob)
+  def readBlobFile(file: File, offset: Long = 0, length: Int = -1, uncompressed: Option[Int]): Future[Array[Byte]] =
+    readBlobFilePlain(file, offset, length)
+      .map(decryptBlob)
+      .map(decompress(uncompressed))
+
+  def decompress(uncompressed: Option[Int])(compressedData: Array[Byte]): Array[Byte] =
+    if (uncompressed.isDefined) {
+      val decompressor = new ZstdDecompressor
+      val us0 = uncompressed.get
+      val uncompressedSize = if (us0 >= 0) us0 else ZstdDecompressor.getDecompressedSize(compressedData, 0, compressedData.length).toInt
+      require(uncompressedSize >= 0, s"uncompressed: $uncompressed compressed: ${compressedData.size}")
+      val buffer = new Array[Byte](uncompressedSize)
+      val size = decompressor.decompress(compressedData, 0, compressedData.length, buffer, 0, buffer.length)
+      require(size == buffer.length)
+      buffer
+    } else
+      compressedData
 
   def readBlobFilePlain(file: File, offset: Long = 0, length: Int = -1): Future[ByteBuffer] = Future {
     val mapped = mappedFileFor(file).duplicate()
@@ -168,16 +198,16 @@ class ResticRepository(
   def loadTree(id: Hash): Future[TreeBlob] =
     packIndex.flatMap(i => loadTree(i.lookup(id)))
   def loadTree(packEntry: PackEntry): Future[TreeBlob] =
-    packFile(packEntry.packId).flatMap(readJson[TreeBlob](_, packEntry.offset, packEntry.length))
+    packFile(packEntry.packId).flatMap(readJson[TreeBlob](_, packEntry.offset, packEntry.length, CompressionType(packEntry.uncompressed_length)))
   def loadTree(pack: Hash, blob: PackBlob): Future[TreeBlob] =
-    packFile(pack).flatMap(readJson[TreeBlob](_, blob.offset, blob.length))
+    packFile(pack).flatMap(readJson[TreeBlob](_, blob.offset, blob.length, CompressionType(blob.uncompressed_length)))
 
   def loadBlob(id: Hash): Future[Array[Byte]] =
     packIndex.flatMap(i => loadBlob(i.lookup(id)))
   def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
-    packFile(packEntry.packId).flatMap(readBlobFile(_, packEntry.offset, packEntry.length))
+    packFile(packEntry.packId).flatMap(readBlobFile(_, packEntry.offset, packEntry.length, packEntry.uncompressed_length))
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
-    packFile(pack).flatMap(readBlobFile(_, blob.offset, blob.length))
+    packFile(pack).flatMap(readBlobFile(_, blob.offset, blob.length, blob.uncompressed_length))
 
   def loadIndex(id: Hash): Future[IndexFile] =
     repoFile("index", id, simpleBackingFormat = true).flatMap(readJson[IndexFile](_))
@@ -185,9 +215,27 @@ class ResticRepository(
   def loadSnapshot(id: Hash): Future[Snapshot] =
     repoFile("snapshots", id, simpleBackingFormat = true).flatMap(readJson[Snapshot](_))
 
-  def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1): Future[T] =
-    readBlobFile(file, offset, length)
-      .map(data => new String(data, "utf8").parseJson.convertTo[T])
+  def readJson[T: JsonFormat](file: File, offset: Long = 0, length: Int = -1, compressionType: CompressionType = CompressionType.Tagged): Future[T] =
+    readBlobFile(file, offset, length, uncompressed = None) // will be dealt with afterwards
+      .map { data0 =>
+        val (uncompressedSize, data1) = compressionType match {
+          case CompressionType.Uncompressed  => (None, data0)
+          case CompressionType.Compressed(i) => (Some(i), data0)
+          case CompressionType.Tagged =>
+            data0(0) match {
+              case 1           => (None, data0.drop(1))
+              case 2           => (Some(-1), data0.drop(1))
+              case 0x5b | 0x7b => (None, data0) // backwards compatible detection of no compression (start of JSON document)
+            }
+        }
+        val data =
+          if (uncompressedSize.isDefined)
+            decompress(uncompressedSize)(data1)
+          else
+            data1
+
+        new String(data, "utf8").parseJson.convertTo[T]
+      }
 
   def allSnapshots(): Source[(Hash, Snapshot), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "snapshots")).toVector)

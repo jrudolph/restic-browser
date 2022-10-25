@@ -7,6 +7,8 @@ val sprayJsonV = "1.3.6"
 
 val scalaTestV = "3.2.11"
 
+val aircompressorV = "0.21"
+
 inThisBuild(Def.settings(
   scalaVersion := scalaV
 ))
@@ -20,6 +22,7 @@ lazy val core =
         "com.typesafe.akka" %% "akka-stream" % akkaV,
         "com.typesafe.akka" %% "akka-http-caching" % akkaHttpV,
         "io.spray" %% "spray-json" % sprayJsonV,
+        "io.airlift" % "aircompressor" % aircompressorV,
         "com.lambdaworks" % "scrypt" % "1.4.0",
         "org.scalatest" %% "scalatest" % scalaTestV % "test",
       )

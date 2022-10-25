@@ -150,13 +150,15 @@ object TreeBlob {
 }
 
 case class PackBlob(
-    id:     Hash,
-    `type`: BlobType,
-    offset: Long,
-    length: Int
+    id:                  Hash,
+    `type`:              BlobType,
+    offset:              Long,
+    length:              Int,
+    uncompressed_length: Option[Int]
 ) {
   def isTree: Boolean = `type` == BlobType.Tree
   def isData: Boolean = `type` == BlobType.Data
+  def isCompressed: Boolean = uncompressed_length.isDefined
 }
 case class PackIndex(
     id:    Hash,
@@ -170,7 +172,7 @@ case class IndexFile(
 }
 object IndexFile {
   import spray.json.DefaultJsonProtocol._
-  implicit val packBlobFormat = jsonFormat4(PackBlob.apply _)
+  implicit val packBlobFormat = jsonFormat5(PackBlob.apply _)
   implicit val packIndexFormat = jsonFormat2(PackIndex.apply _)
   implicit val indexFileFormat = jsonFormat2(IndexFile.apply _)
 }
@@ -254,7 +256,8 @@ object Key {
 }
 
 // for use in index
-case class PackEntry(packId: Hash, id: Hash, `type`: BlobType, offset: Long, length: Int) {
+case class PackEntry(packId: Hash, id: Hash, `type`: BlobType, offset: Long, length: Int, uncompressed_length: Option[Int]) {
   def isTree: Boolean = `type` == BlobType.Tree
   def isData: Boolean = `type` == BlobType.Data
+  def isCompressed: Boolean = uncompressed_length.isDefined
 }
