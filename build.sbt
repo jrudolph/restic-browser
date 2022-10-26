@@ -3,6 +3,7 @@ val scalaV = "2.13.8"
 
 val akkaV = "2.6.19"
 val akkaHttpV = "10.2.9"
+val alpakkaV = "4.0.0"
 val sprayJsonV = "1.3.6"
 
 val scalaTestV = "3.2.11"
@@ -21,6 +22,7 @@ lazy val core =
       libraryDependencies ++= Seq(
         "com.typesafe.akka" %% "akka-stream" % akkaV,
         "com.typesafe.akka" %% "akka-http-caching" % akkaHttpV,
+        "com.lightbend.akka" %% "akka-stream-alpakka-file" % alpakkaV,
         "io.spray" %% "spray-json" % sprayJsonV,
         "io.airlift" % "aircompressor" % aircompressorV,
         "com.lambdaworks" % "scrypt" % "1.4.0",

@@ -1,18 +1,20 @@
 package net.virtualvoid.restic
 
 import akka.actor.ActorSystem
-import akka.stream.scaladsl.{ Sink, Source, StreamConverters }
+import akka.stream.OverflowStrategy
+import akka.stream.alpakka.file.ArchiveMetadata
+import akka.stream.alpakka.file.scaladsl.Archive
+import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
 
-import java.io.{ BufferedOutputStream, File, FileInputStream, FileOutputStream }
+import java.io.{ File, FileInputStream, FileOutputStream }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
 import java.nio.file.Files
 import java.nio.{ ByteBuffer, MappedByteBuffer }
 import java.util.concurrent.Executors
-import java.util.zip.{ ZipEntry, ZipOutputStream }
 import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable
 import scala.concurrent.duration._
@@ -310,45 +312,28 @@ class ResticRepository(
       .map(f => repoDir.toPath.relativize(f.toPath).toFile)
       .mapAsync(16)(f => loadSnapshot(Hash(f.getName)).map(Hash(f.getName) -> _))
 
-  def asZip(hash: Hash): Source[ByteString, Future[Any]] =
-    StreamConverters.asOutputStream(60.seconds)
-      .mapMaterializedValue { os =>
-        val zipStream = new ZipOutputStream(new BufferedOutputStream(os, 10000))
-        zipStream.setLevel(0)
+  def asZip(hash: Hash): Source[ByteString, Any] = {
+    def walk(hash: Hash, pathPrefix: String): Source[(String, TreeLeaf), Any] =
+      Source.futureSource(
+        loadTree(hash)
+          .map { b =>
+            val leafs = b.nodes.collect { case l: TreeLeaf => (pathPrefix + l.name) -> l }
+            val subtrees = b.nodes.collect { case b: TreeBranch => walk(b.subtree, pathPrefix + b.name + "/") }
+            Source(leafs).concat(Source(subtrees).flatMapConcat(identity))
+          }
+      )
 
-        def walk(hash: Hash, pathPrefix: String): Source[(String, TreeLeaf), Any] =
-          Source.futureSource(
-            loadTree(hash)
-              .map { b =>
-                val leafs = b.nodes.collect { case l: TreeLeaf => (pathPrefix + l.name) -> l }
-                val subtrees = b.nodes.collect { case b: TreeBranch => walk(b.subtree, pathPrefix + b.name + "/") }
-                Source(leafs).concat(Source(subtrees).flatMapConcat(identity))
-              }
+    walk(hash, "")
+      .map {
+        case (path, leaf) =>
+          (
+            ArchiveMetadata(path),
+            Source(leaf.content)
+            .mapAsync(8)(loadBlob).map(ByteString(_))
+            .preMaterialize()._2 // requires changing the subscription timeout depending on buffer below
           )
-
-        walk(hash, "")
-          .mapConcat {
-            case (path, leaf) =>
-              // stream leaf into zipStream
-              val entry = new ZipEntry(path)
-              entry.setSize(leaf.size.getOrElse(0))
-              Seq(entry) ++ leaf.content
-          }
-          .mapAsync(128) {
-            case ze: ZipEntry => Future.successful(ze)
-            case h: Hash      => loadBlob(h)
-          }
-          .map {
-            case ze: ZipEntry =>
-              zipStream.flush()
-              zipStream.putNextEntry(ze)
-            case b: Array[Byte] =>
-              zipStream.write(b)
-          }
-          .runWith(Sink.ignore)
-          .transform { x =>
-            zipStream.close() // FIXME: fail on failure
-            x
-          }
       }
+      .buffer(10, OverflowStrategy.backpressure)
+      .via(Archive.zip())
+  }
 }
