@@ -337,6 +337,11 @@ class ResticRepository(
       .map(f => repoDir.toPath.relativize(f.toPath).toFile)
       .mapAsync(16)(f => loadSnapshot(Hash(f.getName)).map(Hash(f.getName) -> _))
 
+  def dataForLeaf(leaf: TreeLeaf): Source[ByteString, Any] =
+    Source(leaf.content)
+      .mapAsync(8)(loadBlob)
+      .map(ByteString(_))
+
   def asZip(hash: Hash): Source[ByteString, Any] = {
     def walk(hash: Hash, pathPrefix: String): Source[(String, TreeLeaf), Any] =
       Source.futureSource(
@@ -353,8 +358,7 @@ class ResticRepository(
         case (path, leaf) =>
           (
             ArchiveMetadata(path),
-            Source(leaf.content)
-            .mapAsync(8)(loadBlob).map(ByteString(_))
+            dataForLeaf(leaf)
             .preMaterialize()._2 // requires changing the subscription timeout depending on buffer below
           )
       }

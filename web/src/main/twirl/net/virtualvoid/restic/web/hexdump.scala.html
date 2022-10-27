@@ -1,0 +1,9 @@
+@import net.virtualvoid.restic._
+
+@(hash: Hash, name: String, hexDump: String)
+
+<h2><a href="/blob/@hash">@hash</a>/<a href="/blob/@hash/@name">@name</a></h2>
+
+<h3>Hexdump</h3>
+
+<code><pre>@hexDump</pre></code>

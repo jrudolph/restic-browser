@@ -1,8 +1,13 @@
 @import net.virtualvoid.restic._
 
-@(hash: Hash, name: String, leaf: TreeLeaf, hexDump: String, entries: Seq[PackEntry])
+@(hash: Hash, name: String, leaf: TreeLeaf, entries: Seq[PackEntry])
 
-<h3>Meta</h3>
+<h2><a href="/blob/@hash">@hash</a>/@name</h2>
+
+<a href="@name/show">Show</a>
+<a href="@name/download">Download</a>
+<a href="@name/hexdump">Hexdump</a>
+
 <table>
     <tr><th>Filename</th><td>@name</td></tr>
     <tr><th>Size</th><td>@{leaf.size}</td></tr>
@@ -23,7 +28,3 @@
     </tr>
 }
 </table>
-
-<h3>Hexdump</h3>
-
-<code><pre>@hexDump</pre></code>

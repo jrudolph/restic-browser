@@ -2,10 +2,11 @@ package net.virtualvoid.restic
 package web
 
 import akka.http.scaladsl.model.headers.ContentDispositionTypes
-import akka.http.scaladsl.model.{ ContentTypes, HttpEntity, headers }
+import akka.http.scaladsl.model.{ ContentType, ContentTypes, HttpCharsets, HttpEntity, MediaTypes, headers }
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.scaladsl.Sink
+import akka.util.ByteString
 
 import scala.concurrent.Future
 
@@ -55,22 +56,47 @@ class ResticRoutes(reader: ResticRepository) {
                     }
                   }
                 case Some(_) =>
-                  respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> (h.take(16) + ".zip")))) {
+                  respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> (hash.short + ".zip")))) {
                     complete(HttpEntity(ContentTypes.`application/octet-stream`, reader.asZip(hash)))
                   }
               }
             },
-            path(Segment) { fileName =>
+            pathPrefix(Segment) { fileName =>
               val hash = Hash(h)
               val tF = reader.loadTree(hash)
               onSuccess(tF) { t =>
-                val node = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
-                val dataF = node.content.headOption.map(reader.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
+                val leaf = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
                 import reader.system.dispatcher
-                val entriesF = Future.traverse(node.content)(c => reader.blob2packIndex.map(_.lookup(c)))
+                val entriesF = Future.traverse(leaf.content)(c => reader.blob2packIndex.map(_.lookup(c)))
+                def dataEntity = {
+                  val extIdx = fileName.lastIndexOf(".") + 1
+                  val ext = fileName.drop(extIdx).toLowerCase
+                  val mediaType = MediaTypes.forExtensionOption(ext).getOrElse(MediaTypes.`application/octet-stream`)
+                  HttpEntity(ContentType(mediaType, () => HttpCharsets.`UTF-8`), reader.dataForLeaf(leaf))
+                }
 
-                (onSuccess(dataF) & onSuccess(entriesF)) { (data, entries) =>
-                  complete(html.file(hash, fileName, node, printBytes(data), entries))
+                onSuccess(entriesF) { entries =>
+                  concat(
+                    pathEnd {
+                      complete(html.file(hash, fileName, leaf, entries))
+                    },
+                    path("download") {
+                      respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> fileName))) {
+                        complete(HttpEntity(ContentTypes.`application/octet-stream`, reader.dataForLeaf(leaf)))
+                      }
+                    },
+                    path("show") {
+                      respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.inline, Map("filename" -> fileName))) {
+                        complete(dataEntity)
+                      }
+                    },
+                    path("hexdump") {
+                      val fullData = reader.dataForLeaf(leaf).runWith(Sink.fold(ByteString.empty)(_ ++ _))
+                      onSuccess(fullData) { data =>
+                        complete(html.hexdump(hash, fileName, printBytes(data.toArray[Byte])))
+                      }
+                    }
+                  )
                 }
               }
             }
