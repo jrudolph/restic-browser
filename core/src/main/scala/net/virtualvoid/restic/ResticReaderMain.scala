@@ -159,7 +159,7 @@ object ResticReaderMain extends App {
       }
   }
 
-  reader.packIndex.flatMap { i =>
+  reader.blob2packIndex.flatMap { i =>
     if (!backrefIndexFile.exists()) {
       /*println("Loading all trees")
       val allTrees =
@@ -268,7 +268,7 @@ object ResticReaderMain extends App {
       //val target = "0004da4650044bcd"
       //findChainsForHash(Hash(target))
 
-      reader.packIndex.foreach { packIdx =>
+      reader.blob2packIndex.foreach { packIdx =>
         lazy val singleChain = memoized(singleChainInternal)
         def singleChainInternal(id: Hash): Future[Option[Chain]] = {
           val parents = idx.lookupAll(id)

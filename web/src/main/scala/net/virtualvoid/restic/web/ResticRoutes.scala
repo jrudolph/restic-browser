@@ -67,7 +67,7 @@ class ResticRoutes(reader: ResticRepository) {
                 val node = t.nodes.find(_.name == fileName).get.asInstanceOf[TreeLeaf]
                 val dataF = node.content.headOption.map(reader.loadBlob).getOrElse(Future.successful(Array.empty[Byte]))
                 import reader.system.dispatcher
-                val entriesF = Future.traverse(node.content)(c => reader.packIndex.map(_.lookup(c)))
+                val entriesF = Future.traverse(node.content)(c => reader.blob2packIndex.map(_.lookup(c)))
 
                 (onSuccess(dataF) & onSuccess(entriesF)) { (data, entries) =>
                   complete(html.file(hash, fileName, node, printBytes(data), entries))

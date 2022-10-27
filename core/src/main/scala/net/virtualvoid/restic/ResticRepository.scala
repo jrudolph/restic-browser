@@ -107,25 +107,12 @@ class ResticRepository(
     res.mkdirs()
     res
   }
-  val packIndexFile = new File(localCacheDir, "pack.idx")
+  val blob2PackIndexFile = new File(localCacheDir, "blob2pack.idx")
 
-  private implicit val indexEntrySerializer = PackBlobSerializer
-  lazy val packIndex: Future[Index[PackEntry]] =
-    if (packIndexFile.exists()) Future.successful(Index.load(packIndexFile))
-    else Index.createIndex(packIndexFile, allIndexEntries)
-
-  def packEntryFor(blob: Hash): Future[PackEntry] =
-    packIndex.map(_.lookup(blob))
-
-  lazy val allPackIndices: Future[Seq[PackIndex]] =
-    Source(ResticRepository.allFiles(new File(repoDir, "index")))
-      .mapAsync(8)(f => loadIndex(Hash(f.getName)))
-      .mapConcat(_.packs) // FIXME: resolve superseding
-      .runWith(Sink.seq)
-  lazy val packIndexMap: Future[Map[Hash, PackIndex]] =
-    allPackIndices.map { ixs => ixs.map(i => i.id -> i).toMap }
-  def packIndexFor(packHash: Hash): Future[PackIndex] =
-    packIndexMap.map(_(packHash))
+  private implicit val packEntrySerializer = PackBlobSerializer
+  lazy val blob2packIndex: Future[Index[PackEntry]] =
+    if (blob2PackIndexFile.exists()) Future.successful(Index.load(blob2PackIndexFile))
+    else Index.createIndex(blob2PackIndexFile, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
@@ -133,6 +120,31 @@ class ResticRepository(
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
+
+  def packEntryFor(blob: Hash): Future[PackEntry] =
+    blob2packIndex.map(_.lookup(blob))
+
+  val pack2indexIndexFile = new File(localCacheDir, "pack2index.idx")
+  private implicit val hashSerializer = HashSerializer
+  private lazy val pack2indexIndex: Future[Index[Hash]] =
+    if (pack2indexIndexFile.exists()) Future.successful(Index.load(pack2indexIndexFile))
+    else Index.createIndex(pack2indexIndexFile, allPack2IndexEntries)
+
+  def allPack2IndexEntries: Source[(Hash, Hash), Any] =
+    Source(ResticRepository.allFiles(new File(repoDir, "index")))
+      .mapAsync(1) { f =>
+        val h = Hash(f.getName)
+        loadIndex(h).map(h -> _)
+      }
+      .mapConcat {
+        case (packIndexHash, idx) => idx.packs.map(_.id -> packIndexHash)
+      }
+
+  def packIndexFor(packHash: Hash): Future[PackIndex] =
+    for {
+      map <- pack2indexIndex
+      indexFile <- loadIndex(map.lookup(packHash))
+    } yield indexFile.packs.find(_.id == packHash).get
 
   private def mappedFileFor(file: File): MappedByteBuffer = synchronized {
     mappedFiles.get(file) match {
@@ -286,7 +298,7 @@ class ResticRepository(
     loadTree(blob.toEntryOf(pack))
 
   def loadBlob(id: Hash): Future[Array[Byte]] =
-    packIndex.flatMap(i => loadBlob(i.lookup(id)))
+    blob2packIndex.flatMap(i => loadBlob(i.lookup(id)))
   def loadBlob(packEntry: PackEntry): Future[Array[Byte]] =
     packData(packEntry).flatMap(readBlobFile(_, packEntry.uncompressed_length))
   def loadBlob(pack: Hash, blob: PackBlob): Future[Array[Byte]] =
