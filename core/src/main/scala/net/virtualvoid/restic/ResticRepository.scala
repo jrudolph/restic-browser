@@ -146,6 +146,8 @@ class ResticRepository(
       indexFile <- loadIndex(map.lookup(packHash))
     } yield indexFile.packs.find(_.id == packHash).get
 
+  lazy val backreferences = BackReferences(this)
+
   private def mappedFileFor(file: File): MappedByteBuffer = synchronized {
     mappedFiles.get(file) match {
       case Some(b) => b

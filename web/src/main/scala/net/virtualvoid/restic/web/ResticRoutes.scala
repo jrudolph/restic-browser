@@ -50,9 +50,9 @@ class ResticRoutes(reader: ResticRepository) {
             pathEnd {
               parameter("zip".?) {
                 case None =>
-                  onSuccess(reader packEntryFor (hash)) { pE =>
+                  (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.backReferencesFor(hash))) { (pE, backRefs) =>
                     onSuccess(reader.loadTree(pE)) { t =>
-                      complete(html.tree(pE.packId, hash, t))
+                      complete(html.tree(pE.packId, hash, t, backRefs.collect { case tr: TreeReference => tr }))
                     }
                   }
                 case Some(_) =>

@@ -1,6 +1,6 @@
 @import net.virtualvoid.restic._
 
-@(packHash: Hash, hash: Hash, tree: TreeBlob)
+@(packHash: Hash, hash: Hash, tree: TreeBlob, backrefs: Seq[TreeReference])
 
 <h3>Tree: @hash</h3>
 
@@ -26,5 +26,14 @@
             <td class="num-cell">@{node.asInstanceOf[TreeLeaf].content.size}</td>
         </tr>
     }
+}
+</table>
+
+<h4>Parents</h4>
+<table>
+@for(TreeReference(blobId, idx) <- backrefs) {
+    <tr>
+        <td><a href="/blob/@blobId">@{blobId.short}</a></td>
+    </tr>
 }
 </table>
