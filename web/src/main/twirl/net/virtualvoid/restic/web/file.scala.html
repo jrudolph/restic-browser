@@ -20,7 +20,7 @@
     <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th><th>Uncompressed Size</th><th>Compression Factor</th></tr>
 @for(entry <- entries) {
     <tr>
-        <td class="hash">@{entry.id.short}</td>
+        <td class="hash"><a href="/blob/@{entry.id}">@{entry.id.short}</a></td>
         <td class="hash"><a href="/pack/@{entry.packId.toString}">@{entry.packId.short}</a></td>
         <td class="num-cell">@{entry.offset}</td>
         <td class="num-cell">@{entry.length}</td>

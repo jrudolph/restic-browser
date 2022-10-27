@@ -1,0 +1,13 @@
+@import net.virtualvoid.restic._
+@import web.ChainSet
+
+@(packEntry: PackEntry, chainset: ChainSet)
+
+<h3>Chunk: @{packEntry.id}</h3>
+
+<table>
+    <tr><th>Size</th><td class="num-cell">@{packEntry.length}</td></tr>
+    <tr><th>Uncompressed Size</th><td class="num-cell">@{packEntry.uncompressed_length.map(_.toString).getOrElse("")}</td></tr>
+</table>
+
+@parentChains(chainset)

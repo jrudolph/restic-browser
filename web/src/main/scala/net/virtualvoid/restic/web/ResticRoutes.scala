@@ -51,8 +51,14 @@ class ResticRoutes(reader: ResticRepository) {
               parameter("zip".?) {
                 case None =>
                   (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.chainsFor(hash))) { (pE, chains) =>
-                    onSuccess(reader.loadTree(pE)) { t =>
-                      complete(html.tree(pE.packId, hash, t, chainSetForChains(chains)))
+                    val cs = chainSetForChains(chains)
+                    pE.`type` match {
+                      case BlobType.Tree =>
+                        onSuccess(reader.loadTree(pE)) { t =>
+                          complete(html.tree(pE.packId, hash, t, cs))
+                        }
+                      case BlobType.Data =>
+                        complete(html.chunk(pE, cs))
                     }
                   }
                 case Some(_) =>
