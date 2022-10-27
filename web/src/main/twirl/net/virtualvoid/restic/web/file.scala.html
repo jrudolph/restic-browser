@@ -15,7 +15,9 @@
     <tr><th>Num Parts</th><td>@{leaf.content.size}</td></tr>
 </table>
 
-<h3>Contents (@{leaf.content.size} parts)</h3>
+@parentChains(chainset)
+
+<h4>Contents (@{leaf.content.size} parts)</h4>
 <table>
     <tr><th>Chunk</th><th>Pack</th><th>Offset</th><th>Size</th><th>Uncompressed Size</th><th>Compression Factor</th></tr>
 @for(entry <- entries) {
@@ -29,5 +31,3 @@
     </tr>
 }
 </table>
-
-@parentChains(chainset)
