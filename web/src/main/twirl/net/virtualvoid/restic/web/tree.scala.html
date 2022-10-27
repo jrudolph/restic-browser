@@ -1,10 +1,18 @@
 @import net.virtualvoid.restic._
 
-@(hash: Hash, tree: TreeBlob)
+@(packHash: Hash, hash: Hash, tree: TreeBlob)
 
-<h3>@hash</h3>
+<h3>Tree: @hash</h3>
 
 <div><a href="?zip">Download as zip</a></div>
+
+<div>
+<table>
+    <tr><th>Pack</th><td class="hash"><a href="/pack/@packHash">@{packHash.short}</a></td></tr>
+</table>
+</div>
+
+<h4>Directory</h4>
 
 <table>
     <tr><th>Name</th><th>Size</th><th>Num Parts</th></tr>

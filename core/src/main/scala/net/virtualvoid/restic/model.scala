@@ -40,6 +40,8 @@ final class Hash private (val bytes: Array[Byte]) {
       } else new String(chArray)
     rec(0)
   }
+
+  def short: String = toString.take(16)
 }
 object Hash {
   def unsafe(bytes: Array[Byte]): Hash = new Hash(bytes)

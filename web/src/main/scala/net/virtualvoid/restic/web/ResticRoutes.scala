@@ -31,15 +31,28 @@ class ResticRoutes(reader: ResticRepository) {
             complete(html.home(infos, reader))
           }
         },
+        pathPrefix("pack") {
+          concat(
+            //pathEndOrSingleSlash
+            path(Segment) { h =>
+              val hash = Hash(h)
+              onSuccess(reader.packIndexFor(hash)) { idx =>
+                complete(html.pack(idx))
+              }
+            }
+          )
+
+        },
         pathPrefix("blob" / Segment) { h =>
           val hash = Hash(h)
           concat(
             pathEnd {
               parameter("zip".?) {
                 case None =>
-                  val tF = reader.loadTree(hash)
-                  onSuccess(tF) { t =>
-                    complete(html.tree(hash, t))
+                  onSuccess(reader packEntryFor (hash)) { pE =>
+                    onSuccess(reader.loadTree(pE)) { t =>
+                      complete(html.tree(pE.packId, hash, t))
+                    }
                   }
                 case Some(_) =>
                   respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> (h.take(16) + ".zip")))) {

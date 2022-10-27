@@ -1,0 +1,37 @@
+@import net.virtualvoid.restic._
+
+@(idx: PackIndex)
+
+<h2>Pack: @{idx.id}</h2>
+
+<table>
+    <tr><th>Num Blobs</th><td class="num-cell">@{idx.blobs.size}</td></tr>
+    <tr><th>Total Data Size</th><td class="num-cell">@{idx.blobs.map(_.length).sum}</td></tr>
+    <tr><th>Total Uncompressed Size</th><td class="num-cell">@{idx.blobs.map(x => x.uncompressed_length.getOrElse(x.length)).sum}</td></tr>
+    <tr><th>Compression Factor</th><td class="num-cell">@{(idx.blobs.map(x => x.uncompressed_length.getOrElse(x.length)).sum.toFloat / idx.blobs.map(_.length).sum).formatted("%5.2f x")}</td></tr>
+</table>
+<h3>Blobs</h3>
+
+<!--
+id:                  Hash,
+    `type`:              BlobType,
+    offset:              Long,
+    length:              Int,
+    uncompressed_length: Option[Int]
+-->
+
+<table>
+    <tr><th>Id</th><th>Type</th><th>Offset</th><th>Length</th><th>Uncompressed Length</th><th>Compression Factor</th></tr>
+    @for(blob <- idx.blobs.sortBy(_.offset)) {
+        <tr>
+            <td class="hash">
+                <a @{if (blob.`type` == BlobType.Tree) s"href=/blob/${blob.id}" }>@{blob.id.short}</a>
+            </td>
+            <td>@{blob.`type`}</td>
+            <td class="num-cell">@{blob.offset}</td>
+            <td class="num-cell">@{blob.length}</td>
+            <td class="num-cell">@{blob.uncompressed_length.map(_.toString).getOrElse("")}</td>
+            <td class="num-cell">@{blob.uncompressed_length.map(ul => (ul.toFloat / blob.length).formatted("%5.2f x")).getOrElse("")}</td>
+        </tr>
+    }
+</table>

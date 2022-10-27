@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.stream.OverflowStrategy
 import akka.stream.alpakka.file.ArchiveMetadata
 import akka.stream.alpakka.file.scaladsl.Archive
-import akka.stream.scaladsl.Source
+import akka.stream.scaladsl.{ Sink, Source }
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
@@ -114,9 +114,22 @@ class ResticRepository(
     if (packIndexFile.exists()) Future.successful(Index.load(packIndexFile))
     else Index.createIndex(packIndexFile, allIndexEntries)
 
+  def packEntryFor(blob: Hash): Future[PackEntry] =
+    packIndex.map(_.lookup(blob))
+
+  lazy val allPackIndices: Future[Seq[PackIndex]] =
+    Source(ResticRepository.allFiles(new File(repoDir, "index")))
+      .mapAsync(8)(f => loadIndex(Hash(f.getName)))
+      .mapConcat(_.packs) // FIXME: resolve superseding
+      .runWith(Sink.seq)
+  lazy val packIndexMap: Future[Map[Hash, PackIndex]] =
+    allPackIndices.map { ixs => ixs.map(i => i.id -> i).toMap }
+  def packIndexFor(packHash: Hash): Future[PackIndex] =
+    packIndexMap.map(_(packHash))
+
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
-      .mapAsync(1024)(f => loadIndex(Hash(f.getName)))
+      .mapAsync(8)(f => loadIndex(Hash(f.getName)))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
@@ -245,7 +258,7 @@ class ResticRepository(
   }
 
   def loadTree(id: Hash): Future[TreeBlob] =
-    packIndex.flatMap(i => loadTree(i.lookup(id)))
+    packEntryFor(id).flatMap(loadTree)
 
   def packData(packEntry: PackEntry, alwaysCachePack: Boolean = false): Future[FileLocation] =
     (if (alwaysCachePack) CacheStrategy.Pack else settings.cacheStrategy) match {
