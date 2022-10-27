@@ -24,9 +24,7 @@ id:                  Hash,
     <tr><th>Id</th><th>Type</th><th>Offset</th><th>Length</th><th>Uncompressed Length</th><th>Compression Factor</th></tr>
     @for(blob <- idx.blobs.sortBy(_.offset)) {
         <tr>
-            <td class="hash">
-                <a @{if (blob.`type` == BlobType.Tree) s"href=/blob/${blob.id}" }>@{blob.id.short}</a>
-            </td>
+            <td class="hash"><a href=/blob/@{blob.id}>@{blob.id.short}</a></td>
             <td>@{blob.`type`}</td>
             <td class="num-cell">@{blob.offset}</td>
             <td class="num-cell">@{blob.length}</td>
