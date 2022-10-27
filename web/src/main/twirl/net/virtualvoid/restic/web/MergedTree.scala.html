@@ -31,11 +31,11 @@
         <th>Size</th>
         <th>Version</th>
     </tr>
-@for(rev <- thisNode.nestedRevisions.sortBy(_.lastSeen).reverse) {
+@for(rev <- thisNode.nestedRevisions.sortBy(_.snapshots.lastSeen).reverse) {
     <tr>
         <td class="num-cell">@{rev.snapshots.size}</td>
-        <td class="num-cell">@{rev.firstSeenPeriod}</td>
-        <td class="num-cell">@{rev.lastSeenPeriod}</td>
+        <td class="num-cell">@{rev.snapshots.firstSeenPeriod}</td>
+        <td class="num-cell">@{rev.snapshots.lastSeenPeriod}</td>
         @if(rev.node.isBranch) {
             <td></td>
             <td><a href="/blob/@{rev.node.asInstanceOf[TreeBranch].subtree}">@{rev.node.asInstanceOf[TreeBranch].subtree}</a></td>

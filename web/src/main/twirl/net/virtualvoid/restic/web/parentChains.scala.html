@@ -1,0 +1,17 @@
+@import net.virtualvoid.restic._
+@import web.ChainSet
+
+@(chainset: ChainSet)
+
+<h4>Parents</h4>
+<table>
+    <tr><th>Num Snapshots</th><th>First seen</th><th>Last seen</th><th>Path</th></tr>
+    @for((hostPath, snaps) <- chainset.hostPathChainsWithSnapshots) {
+    <tr>
+        <td>@{snaps.size}</td>
+        <td>@{snaps.firstSeenPeriod}</td>
+        <td>@{snaps.lastSeenPeriod}</td>
+        <td><a href="/host/@{hostPath.asUrl}">@{hostPath.asString}</a></td>
+    </tr>
+    }
+</table>

@@ -1,6 +1,7 @@
 @import net.virtualvoid.restic._
+@import web.ChainSet
 
-@(packHash: Hash, hash: Hash, tree: TreeBlob, chains: Seq[Chain])
+@(packHash: Hash, hash: Hash, tree: TreeBlob, chainset: ChainSet)
 
 <h3>Tree: @hash</h3>
 
@@ -29,20 +30,4 @@
 }
 </table>
 
-<h4>Parents</h4>
-<table>
-@for(Chain(id, chainNodes) <- chains) {
-    <tr>
-        <td>
-        @for(node <- chainNodes.reverse) {
-            @{
-                node match {
-                    case TreeChainNode(TreeBranch(name, subtree)) => <a href={ "/blob/" + subtree }>{name}</a>
-                    case SnapshotNode(id, snap) => snap.hostname
-                }
-            } /
-        }
-        </td>
-    </tr>
-}
-</table>
+@parentChains(chainset)

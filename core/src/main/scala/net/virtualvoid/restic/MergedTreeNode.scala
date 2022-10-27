@@ -5,18 +5,21 @@ import scala.concurrent.Future
 import MergedTreeNode.convertToInterval
 import akka.stream.scaladsl.{ Sink, Source }
 
-case class PathRevision(snapshots: Seq[Snapshot], treeBlobId: Hash, node: TreeNode) {
+case class SnapshotSet(snapshots: Seq[Snapshot]) {
   def firstSeen: ZonedDateTime = snapshots.map(_.time).min
   def firstSeenPeriod: String = convertToInterval(firstSeen)
   def lastSeen: ZonedDateTime = snapshots.map(_.time).max
   def lastSeenPeriod: String = convertToInterval(lastSeen)
+  def size: Int = snapshots.size
 }
+
+case class PathRevision(snapshots: SnapshotSet, treeBlobId: Hash, node: TreeNode)
 
 case class MergedTreeNode(
     name:            String,
     nestedRevisions: Seq[PathRevision]
 ) {
-  def revisions: Seq[(TreeNode, Snapshot)] = nestedRevisions.flatMap { case p: PathRevision => p.snapshots.map(p.node -> _) }
+  def revisions: Seq[(TreeNode, Snapshot)] = nestedRevisions.flatMap { case p: PathRevision => p.snapshots.snapshots.map(p.node -> _) }
   lazy val numDistinctRevisions: Int = revisions.map { case (b: TreeBranch, _) => b.subtree; case (l: TreeLeaf, _) => l.content; case (l: TreeLink, _) => l.linktarget }.distinct.size
   def firstSeen: ZonedDateTime = revisions.map(_._2.time).min
   def firstSeenPeriod: String = convertToInterval(firstSeen)
@@ -34,7 +37,7 @@ case class MergedTreeNode(
 
   def hasBeenDeletedIn(parentNode: MergedTreeNode): Boolean = {
     def lastPerSnapshotSpec(node: MergedTreeNode): Map[(String, Seq[String]), ZonedDateTime] =
-      node.nestedRevisions.flatMap(_.snapshots)
+      node.nestedRevisions.flatMap(_.snapshots.snapshots)
         .groupBy(s => (s.hostname, s.paths))
         .view.mapValues(_.map(_.time).max).toMap
 
@@ -64,7 +67,7 @@ object MergedTreeNode {
       }
 
     rec(
-      MergedTreeNode("", snapshots.groupBy(_.tree).map { case (tree, snaps) => PathRevision(snaps, Hash("00") /* dummy */ , TreeBranch("".asInstanceOf[CachedName.T], tree)) }.toVector),
+      MergedTreeNode("", snapshots.groupBy(_.tree).map { case (tree, snaps) => PathRevision(SnapshotSet(snaps), Hash("00") /* dummy */ , TreeBranch("".asInstanceOf[CachedName.T], tree)) }.toVector),
       path.toList
     )
   }
@@ -93,7 +96,7 @@ object MergedTreeNode {
                 .groupBy(_.node match { case b: TreeBranch => b.subtree; case l: TreeLeaf => l.content; case l: TreeLink => l.linktarget })
                 .map {
                   case (_, revs) =>
-                    PathRevision(revs.flatMap(_.snapshots), revs.head.treeBlobId, revs.head.node)
+                    PathRevision(SnapshotSet(revs.flatMap(_.snapshots.snapshots)), revs.head.treeBlobId, revs.head.node)
                 }
                 .toVector
             )

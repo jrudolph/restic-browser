@@ -52,7 +52,7 @@ class ResticRoutes(reader: ResticRepository) {
                 case None =>
                   (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.chainsFor(hash))) { (pE, chains) =>
                     onSuccess(reader.loadTree(pE)) { t =>
-                      complete(html.tree(pE.packId, hash, t, chains))
+                      complete(html.tree(pE.packId, hash, t, chainSetForChains(chains)))
                     }
                   }
                 case Some(_) =>
@@ -78,7 +78,9 @@ class ResticRoutes(reader: ResticRepository) {
                 onSuccess(entriesF) { entries =>
                   concat(
                     pathEnd {
-                      complete(html.file(hash, fileName, leaf, entries))
+                      onSuccess(chainsForFile(leaf)) { chains =>
+                        complete(html.file(hash, fileName, leaf, entries, chainSetForChains(chains)))
+                      }
                     },
                     path("download") {
                       respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> fileName))) {
@@ -159,4 +161,41 @@ class ResticRoutes(reader: ResticRepository) {
           }
           .toVector
       }
+
+  def chainSetForChains(chains: Seq[Chain]): ChainSet = {
+    def hostPathSnapshot(chain: Chain): HostPathSnapshot = chain.chain.reverse match {
+      case SnapshotNode(id, snap) :: remaining =>
+        val path = remaining.map(_.asInstanceOf[TreeChainNode].tree.name)
+        HostPathSnapshot(HostPath(snap.hostname, path), snap)
+    }
+    ChainSet(chains.map(hostPathSnapshot).groupBy(_.hostPath).mapValues(x => SnapshotSet(x.map(_.snapshot))).toSeq.sortBy(_._2.lastSeen).reverse)
+  }
+
+  def chainsForFile(leaf: TreeLeaf): Future[Seq[Chain]] =
+    if (leaf.content.isEmpty)
+      Future.successful(Nil)
+    else {
+      reader.backreferences.chainsFor(leaf.content.head).map { chains =>
+        chains.filter { c =>
+          c.chain.head match {
+            case tc @ TreeChainNode(_: TreeBranch) => true
+            case tc @ TreeChainNode(_: TreeLink)   => true
+            case tc @ TreeChainNode(l: TreeLeaf)   => l.content == leaf.content
+          }
+
+        }
+      }
+    }
 }
+
+case class HostPath(
+    host: String,
+    path: Seq[String]
+) {
+  def asString: String = s"$host:/${path.mkString("", "/", "")}"
+  def asUrl: String = s"$host/${path.mkString("/")}"
+}
+case class HostPathSnapshot(hostPath: HostPath, snapshot: Snapshot)
+case class ChainSet(
+    hostPathChainsWithSnapshots: Seq[(HostPath, SnapshotSet)]
+)

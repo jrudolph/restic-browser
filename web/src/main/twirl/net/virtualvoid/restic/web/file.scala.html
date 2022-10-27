@@ -1,6 +1,7 @@
 @import net.virtualvoid.restic._
+@import web.ChainSet
 
-@(hash: Hash, name: String, leaf: TreeLeaf, entries: Seq[PackEntry])
+@(hash: Hash, name: String, leaf: TreeLeaf, entries: Seq[PackEntry], chainset: ChainSet)
 
 <h2><a href="/blob/@hash">@hash</a>/@name</h2>
 
@@ -28,3 +29,5 @@
     </tr>
 }
 </table>
+
+@parentChains(chainset)
