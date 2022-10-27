@@ -17,6 +17,7 @@ case class MergedTreeNode(
     nestedRevisions: Seq[PathRevision]
 ) {
   def revisions: Seq[(TreeNode, Snapshot)] = nestedRevisions.flatMap { case p: PathRevision => p.snapshots.map(p.node -> _) }
+  lazy val numDistinctRevisions: Int = revisions.map { case (b: TreeBranch, _) => b.subtree; case (l: TreeLeaf, _) => l.content; case (l: TreeLink, _) => l.linktarget }.distinct.size
   def firstSeen: ZonedDateTime = revisions.map(_._2.time).min
   def firstSeenPeriod: String = convertToInterval(firstSeen)
   def lastSeen: ZonedDateTime = revisions.map(_._2.time).max

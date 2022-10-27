@@ -108,6 +108,7 @@ sealed trait TreeNode extends Product {
   def name: String
   def isBranch: Boolean
   def isLeaf: Boolean
+  def isLink: Boolean
 }
 case class TreeLeaf(
     name:    CachedName.T,
@@ -116,6 +117,7 @@ case class TreeLeaf(
 ) extends TreeNode {
   override def isBranch: Boolean = false
   override def isLeaf: Boolean = true
+  override def isLink: Boolean = false
 }
 case class TreeBranch(
     name:    CachedName.T,
@@ -123,6 +125,7 @@ case class TreeBranch(
 ) extends TreeNode {
   override def isBranch: Boolean = true
   override def isLeaf: Boolean = false
+  override def isLink: Boolean = false
 }
 case class TreeLink(
     name:       CachedName.T,
@@ -130,6 +133,7 @@ case class TreeLink(
 ) extends TreeNode {
   override def isBranch: Boolean = false
   override def isLeaf: Boolean = false
+  override def isLink: Boolean = true
 }
 case class TreeBlob(
     nodes: Vector[TreeNode]
