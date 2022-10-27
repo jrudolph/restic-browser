@@ -2,6 +2,12 @@
 
 This project provides a web-based read-only interface to browse a [restic](https://restic.readthedocs.io) backup repostory.
 
+#### Merged Tree View
+![image](https://user-images.githubusercontent.com/9868/170083857-a8e647a5-7426-4f90-9922-d7087e7a2af1.png)
+
+#### Tree Blob View
+![image](https://user-images.githubusercontent.com/9868/170083995-bd6e3bcf-8e80-463d-8063-38aa6cd1626c.png)
+
 ## Goals
 
  * Provide an alternative implementation for restic internals
