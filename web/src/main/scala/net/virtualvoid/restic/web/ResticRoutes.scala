@@ -50,16 +50,23 @@ class ResticRoutes(reader: ResticRepository) {
             pathEnd {
               parameter("zip".?) {
                 case None =>
-                  (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.chainsFor(hash))) { (pE, chains) =>
-                    val cs = chainSetForChains(chains)
-                    pE.`type` match {
-                      case BlobType.Tree =>
-                        onSuccess(reader.loadTree(pE)) { t =>
-                          complete(html.tree(pE.packId, hash, t, cs))
+                  parameter("json".?) {
+                    case None =>
+                      (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.chainsFor(hash))) { (pE, chains) =>
+                        val cs = chainSetForChains(chains)
+                        pE.`type` match {
+                          case BlobType.Tree =>
+                            onSuccess(reader.loadTree(pE)) { t =>
+                              complete(html.tree(pE.packId, hash, t, cs))
+                            }
+                          case BlobType.Data =>
+                            complete(html.chunk(pE, cs))
                         }
-                      case BlobType.Data =>
-                        complete(html.chunk(pE, cs))
-                    }
+                      }
+                    case Some(_) =>
+                      onSuccess(reader.loadBlob(hash)) { data =>
+                        complete(HttpEntity(ContentTypes.`application/json`, ByteString(data)))
+                      }
                   }
                 case Some(_) =>
                   respondWithHeader(headers.`Content-Disposition`(ContentDispositionTypes.attachment, Map("filename" -> (hash.short + ".zip")))) {
