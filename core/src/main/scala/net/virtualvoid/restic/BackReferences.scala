@@ -1,16 +1,25 @@
 package net.virtualvoid.restic
 
+import akka.http.caching.LfuCache
+import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
 import akka.stream.scaladsl.{ Sink, Source }
 
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import scala.concurrent.Future
 
 sealed trait BackReference
 case class SnapshotReference(id: Hash) extends BackReference
 case class TreeReference(treeBlobId: Hash, idx: Int) extends BackReference
 
+sealed trait ChainNode
+case class TreeChainNode(tree: TreeNode) extends ChainNode
+case class SnapshotNode(id: Hash, node: Snapshot) extends ChainNode
+case class Chain(id: Hash, chain: List[ChainNode])
+
 trait BackReferences {
   def backReferencesFor(hash: Hash): Future[Seq[BackReference]]
+  def chainsFor(id: Hash): Future[Seq[Chain]]
 }
 object BackReferences {
   private implicit object BackReferenceSerializer extends Serializer[BackReference] {
@@ -75,5 +84,57 @@ object BackReferences {
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =
         backrefIndex.map(_.lookupAll(hash))
+
+      lazy val snapshots: Future[Map[Hash, Snapshot]] =
+        reader.allSnapshots().runWith(Sink.seq).map(_.toMap)
+
+      def lookupRef(t: TreeReference): Future[TreeNode] = reader.loadTree(t.treeBlobId).map(_.nodes(t.idx))
+      def lookupBackRef(r: BackReference): Future[ChainNode] =
+        snapshots.flatMap { snaps =>
+          r match {
+            case t: TreeReference     => lookupRef(t).map(TreeChainNode)
+            case s: SnapshotReference => Future.successful(SnapshotNode(s.id, snaps(s.id)))
+          }
+        }
+
+      def memoized[T, U](f: T => Future[U]): T => Future[U] = {
+        val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
+
+        val hits = new AtomicLong()
+        val misses = new AtomicLong()
+
+        t => {
+          def report(): Unit = {
+            val hs = hits.get()
+            val ms = misses.get()
+            println(f"Hits: $hs%10d Misses: $ms%10d hit rate: ${hs.toFloat / (hs + ms)}%5.2f")
+          }
+
+          if (cache.get(t).isDefined) {
+            if (hits.incrementAndGet() % 10000 == 0) report()
+          } else if (misses.incrementAndGet() % 10000 == 0) report()
+
+          cache(t, () => f(t))
+        }
+      }
+
+      def findBackChainsInternal(id: Hash): Future[Seq[Chain]] =
+        backrefIndex.flatMap { idx =>
+          val parents = idx.lookupAll(id)
+          if (parents.isEmpty) Future.successful(Vector(Chain(id, Nil)))
+          else
+            Source(parents)
+              .mapAsync(16)(ref => lookupBackRef(ref).flatMap {
+                case n: TreeChainNode =>
+                  findBackChains(ref.asInstanceOf[TreeReference].treeBlobId).map(_.map(x => x.copy(chain = n :: x.chain)))
+                case s: SnapshotNode =>
+                  Future.successful(Vector(Chain(id, s :: Nil)))
+              })
+              .mapConcat(identity)
+              .runWith(Sink.seq)
+        }
+      lazy val findBackChains = memoized(findBackChainsInternal)
+      def chainsFor(id: Hash): Future[Seq[Chain]] =
+        findBackChains(id)
     }
 }

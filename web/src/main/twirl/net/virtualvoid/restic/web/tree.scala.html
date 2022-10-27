@@ -1,6 +1,6 @@
 @import net.virtualvoid.restic._
 
-@(packHash: Hash, hash: Hash, tree: TreeBlob, backrefs: Seq[TreeReference])
+@(packHash: Hash, hash: Hash, tree: TreeBlob, chains: Seq[Chain])
 
 <h3>Tree: @hash</h3>
 
@@ -31,9 +31,18 @@
 
 <h4>Parents</h4>
 <table>
-@for(TreeReference(blobId, idx) <- backrefs) {
+@for(Chain(id, chainNodes) <- chains) {
     <tr>
-        <td><a href="/blob/@blobId">@{blobId.short}</a></td>
+        <td>
+        @for(node <- chainNodes.reverse) {
+            @{
+                node match {
+                    case TreeChainNode(TreeBranch(name, subtree)) => <a href={ "/blob/" + subtree }>{name}</a>
+                    case SnapshotNode(id, snap) => snap.hostname
+                }
+            } /
+        }
+        </td>
     </tr>
 }
 </table>
