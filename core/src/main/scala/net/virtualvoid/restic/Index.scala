@@ -101,7 +101,7 @@ object Index {
       val buckets = 1 << bucketBits
       trace(s"[${indexFile.getName}] Sorting into $buckets buckets ($bucketBits bits) for $numEntries entries")
 
-      // create histogram - size: ~ buckets bytes
+      // create histogram - size: ~ buckets * 4 bytes
       val bucketHistogram = Array.fill[Int](buckets)(0) // TODO: use one array for offsets + bucketHistogram
       (0 until numEntries).foreach { i =>
         val key = keyAt(i)
@@ -111,7 +111,7 @@ object Index {
         bucketHistogram(bucket) = (n + 1)
       }
       // find cumulative offsets - size: ~ buckets * 4 bytes
-      val offsets = bucketHistogram.scanLeft(0)(_ + _) // .dropRight(1) - right-most entry can be ignored
+      val offsets = bucketHistogram.scanLeft(0)(_ + _) // .dropRight(1) - right-most entry can be ignored but actually dropping would need array copy
 
       // populate results - size: ~ numEntries * 4 bytes
       val indices = Array.fill[Int](numEntries)(0)
@@ -204,7 +204,7 @@ object Index {
         }
       }
 
-      private def entryAt(id: Hash, idx: Int, step: Int): T = {
+      private def entryAt(id: Hash, idx: Int): T = {
         val targetBaseOffset = idx * EntrySize
         val reader = new Reader {
           val buffer = indexBuffer.asReadOnlyBuffer().position(targetBaseOffset + 32)
@@ -232,14 +232,14 @@ object Index {
 
         val first = it(idx, -1)
         val last = it(idx, +1)
-        (first to last).map(entryAt(id, _, step))
+        (first to last).map(entryAt(id, _))
       } catch {
         case _: NoSuchElementException => Nil
       }
 
       override def lookup(id: Hash): T = {
-        val (idx, step) = find(id)
-        entryAt(id, idx, step)
+        val (idx, _) = find(id)
+        entryAt(id, idx)
       }
 
       def find(id: Hash): (Int, Int) = {
@@ -255,26 +255,25 @@ object Index {
 
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
-        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int, trace: Boolean = false): (Int, Int) =
-          {
-            val guessKey = keyAt(guess)
-            if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
-            if (guessKey == targetKey) (guess, step)
-            else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
-            else if (step > 50) // 10 + log2(numEntries)
-              if (!trace) rec(0, numEntries - 1, firstGuess, 1, trace = true)
-              else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
-            else {
-              val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
-              val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
+        @tailrec def rec(leftIndex: Int, rightIndex: Int, guess: Int, step: Int, trace: Boolean = false): (Int, Int) = {
+          val guessKey = keyAt(guess)
+          if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+          if (guessKey == targetKey) (guess, step)
+          else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
+          else if (step > 50) // 10 + log2(numEntries)
+            if (!trace) rec(0, numEntries - 1, firstGuess, 1, trace = true)
+            else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
+          else {
+            val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
+            val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
 
-              val nextGuess =
-                if (step < 10) interpolate(newLeft, newRight) // interpolation
-                else (newLeft + newRight) / 2 // binary search
+            val nextGuess =
+              if (step < 10) interpolate(newLeft, newRight) // interpolation
+              else (newLeft + newRight) / 2 // binary search
 
-              rec(newLeft, newRight, nextGuess, step + 1, trace)
-            }
+            rec(newLeft, newRight, nextGuess, step + 1, trace)
           }
+        }
 
         rec(0, numEntries - 1, firstGuess, 1)
       }
