@@ -23,7 +23,7 @@ final class Hash private (val bytes: Array[Byte]) {
     case _        => false
   }
 
-  def prefix60AsLong: Long = ByteBuffer.wrap(bytes).getLong >>> 4
+  def longPrefix: Long = ByteBuffer.wrap(bytes).getLong
 
   override def toString: String = {
     val chArray = new Array[Char](bytes.length * 2)

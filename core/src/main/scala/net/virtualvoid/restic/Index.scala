@@ -35,6 +35,10 @@ trait Index[T] {
 }
 
 object Index {
+  // for interpolation we need to fit differences into 64 bits, so work on 63 bit prefixes of hashes in general
+  val HashBits = 63
+  def prefixOf(hash: Hash): Long = hash.longPrefix >>> (64 - HashBits)
+
   def trace(msg: String): Unit = Console.err.println(msg)
   def createIndex[T: Serializer](indexFile: File, data: Source[(Hash, T), Any])(implicit mat: Materializer): Future[Index[T]] = {
     val serializer = implicitly[Serializer[T]]
@@ -86,26 +90,29 @@ object Index {
     def storeIndex(tmpDataFile: File): Index[T] = {
       val HeaderSize = 0
       val EntrySize = 32 /* hash size */ + serializer.entrySize
+      // entries must be 8 byte aligned (because LongBuffer only allows aligned access easily)
       require((serializer.entrySize & 0x07) == 0)
 
       val dataChannel = FileChannel.open(tmpDataFile.toPath)
       val buffer = dataChannel.map(MapMode.READ_ONLY, 0, tmpDataFile.length())
       val longBEBuffer = buffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
 
-      def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
+      def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> (64 - HashBits)
 
       val numEntries = ((tmpDataFile.length() - HeaderSize) / EntrySize).toInt
 
       // round down to previous power of 2
-      val bucketBits = math.max(1, 32 - Integer.numberOfLeadingZeros(numEntries) - 4)
+      val bucketBits = math.max(1, 32 - Integer.numberOfLeadingZeros(numEntries) - 4 /* aim for 2^4 = 16 entries per bucket in avg */ )
       val buckets = 1 << bucketBits
       trace(s"[${indexFile.getName}] Sorting into $buckets buckets ($bucketBits bits) for $numEntries entries")
+
+      def bucketOf(key: Long): Int = (key >>> (HashBits - bucketBits)).toInt
 
       // create histogram - size: ~ buckets * 4 bytes
       val bucketHistogram = Array.fill[Int](buckets)(0) // TODO: use one array for offsets + bucketHistogram
       (0 until numEntries).foreach { i =>
         val key = keyAt(i)
-        val bucket = (key >>> (60 - bucketBits)).toInt
+        val bucket = bucketOf(key)
         val n = bucketHistogram(bucket)
         //trace(f"Bucket for key ${key}%015x: $bucket%015x histo: $n")
         bucketHistogram(bucket) = (n + 1)
@@ -117,7 +124,7 @@ object Index {
       val indices = Array.fill[Int](numEntries)(0)
       (0 until numEntries).foreach { i =>
         val key = keyAt(i)
-        val bucket = (key >>> (60 - bucketBits)).toInt
+        val bucket = bucketOf(key)
         val o = offsets(bucket)
         indices(o) = i
         offsets(bucket) += 1
@@ -188,7 +195,7 @@ object Index {
 
     val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
 
-    def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> 4 // only use 60 bits
+    def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> (64 - HashBits)
 
     new Index[T] {
       override def allKeys: IndexedSeq[Hash] = new IndexedSeq[Hash] {
@@ -225,7 +232,7 @@ object Index {
 
       override def lookupAll(id: Hash): Seq[T] = try {
         val (idx, step) = find(id)
-        val targetKey = id.prefix60AsLong
+        val targetKey = prefixOf(id)
         @tailrec def it(at: Int, step: Int): Int =
           if (at >= 0 && at < numEntries && keyAt(at) == targetKey) it(at + step, step)
           else at - step
@@ -243,7 +250,7 @@ object Index {
       }
 
       def find(id: Hash): (Int, Int) = {
-        val targetKey = id.prefix60AsLong
+        val targetKey = prefixOf(id)
 
         def interpolate(left: Int, right: Int): Int = {
           val leftKey = keyAt(left)
