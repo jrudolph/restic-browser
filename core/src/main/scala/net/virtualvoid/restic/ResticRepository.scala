@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.stream.OverflowStrategy
 import akka.stream.alpakka.file.ArchiveMetadata
 import akka.stream.alpakka.file.scaladsl.Archive
-import akka.stream.scaladsl.{ Sink, Source }
+import akka.stream.scaladsl.Source
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
@@ -93,6 +93,7 @@ class ResticRepository(
   val copyExecutor = ExecutionContext.fromExecutor(Executors.newFixedThreadPool(8))
   val keySpec = new SecretKeySpec(masterKey.encrypt.bytes, "AES")
   val decryptor = ThreadLocal.withInitial(() => new Decryptor(keySpec))
+  val decompressor = ThreadLocal.withInitial(() => new ZstdDecompressor)
 
   private var mappedFiles: Map[File, MappedByteBuffer] = Map.empty
 
@@ -165,12 +166,11 @@ class ResticRepository(
 
   def decompress(uncompressed: Option[Int])(compressedData: Array[Byte]): Array[Byte] =
     if (uncompressed.isDefined) {
-      val decompressor = new ZstdDecompressor
       val us0 = uncompressed.get
       val uncompressedSize = if (us0 >= 0) us0 else ZstdDecompressor.getDecompressedSize(compressedData, 0, compressedData.length).toInt
       require(uncompressedSize >= 0, s"uncompressed: $uncompressed compressed: ${compressedData.size}")
       val buffer = new Array[Byte](uncompressedSize)
-      val size = decompressor.decompress(compressedData, 0, compressedData.length, buffer, 0, buffer.length)
+      val size = decompressor.get().decompress(compressedData, 0, compressedData.length, buffer, 0, buffer.length)
       require(size == buffer.length)
       buffer
     } else
