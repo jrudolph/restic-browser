@@ -6,6 +6,7 @@
 <h3>Chunk: @{packEntry.id}</h3>
 
 <table>
+    <tr><th>Pack</th><td class="hash"><a href="/pack/@{packEntry.packId}">@{packEntry.packId.short}</a></td></tr>
     <tr><th>Size</th><td class="num-cell">@{packEntry.length}</td></tr>
     <tr><th>Uncompressed Size</th><td class="num-cell">@{packEntry.uncompressed_length.map(_.toString).getOrElse("")}</td></tr>
 </table>
