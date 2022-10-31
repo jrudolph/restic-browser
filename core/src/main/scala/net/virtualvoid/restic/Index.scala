@@ -32,6 +32,7 @@ trait Index[T] {
 
   def find(id: Hash): (Int, Int)
   def allKeys: IndexedSeq[Hash]
+  def allValues: IndexedSeq[T]
 }
 
 object Index {
@@ -200,17 +201,23 @@ object Index {
     new Index[T] {
       override def allKeys: IndexedSeq[Hash] = new IndexedSeq[Hash] {
         override def length: Int = numEntries
-
-        override def apply(i: Int): Hash = {
-          val targetPackHashBytes = {
-            val dst = new Array[Byte](32)
-            indexBuffer.asReadOnlyBuffer.position(i * EntrySize).get(dst)
-            dst
-          }
-          Hash.unsafe(targetPackHashBytes)
-        }
+        override def apply(i: Int): Hash = hashAt(i)
       }
 
+      override def allValues: IndexedSeq[T] = new IndexedSeq[T] {
+        override def length: Int = numEntries
+
+        override def apply(i: Int): T =
+          entryAt(hashAt(i), i)
+      }
+      private def hashAt(i: Int): Hash = {
+        val targetPackHashBytes = {
+          val dst = new Array[Byte](32)
+          indexBuffer.asReadOnlyBuffer.position(i * EntrySize).get(dst)
+          dst
+        }
+        Hash.unsafe(targetPackHashBytes)
+      }
       private def entryAt(id: Hash, idx: Int): T = {
         val targetBaseOffset = idx * EntrySize
         val reader = new Reader {
