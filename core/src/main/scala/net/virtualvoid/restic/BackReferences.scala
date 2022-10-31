@@ -52,11 +52,11 @@ object BackReferences {
       import reader.system
       import reader.system.dispatcher
 
-      def treeBackReferences(tree: Hash): Future[Vector[(Hash, TreeReference)]] =
-        reader.loadTree(tree).map { treeBlob =>
+      def treeBackReferences(packEntry: PackEntry): Future[Vector[(Hash, TreeReference)]] =
+        reader.loadTree(packEntry).map { treeBlob =>
           treeBlob.nodes.zipWithIndex.flatMap {
-            case (b: TreeBranch, idx) => Vector(b.subtree -> TreeReference(tree, idx))
-            case (l: TreeLeaf, idx)   => l.content.map(c => c -> TreeReference(tree, idx))
+            case (b: TreeBranch, idx) => Vector(b.subtree -> TreeReference(packEntry.id, idx))
+            case (l: TreeLeaf, idx)   => l.content.map(c => c -> TreeReference(packEntry.id, idx))
             case _                    => Nil
           }
         }
@@ -71,8 +71,8 @@ object BackReferences {
         reader.blob2packIndex.flatMap { i =>
           if (!backrefIndexFile.exists()) {
             val treeSource: Source[(Hash, BackReference), Any] =
-              Source(i.allKeys)
-                .filter(i.lookup(_).isTree)
+              Source(i.allValues)
+                .filter(_.isTree)
                 .mapAsync(1024)(treeBackReferences)
                 .async
                 .mapConcat(identity)
