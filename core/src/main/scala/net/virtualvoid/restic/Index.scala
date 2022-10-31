@@ -231,7 +231,7 @@ object Index {
       }
 
       override def lookupAll(id: Hash): Seq[T] = try {
-        val (idx, step) = find(id)
+        val (idx, _) = find(id)
         val targetKey = prefixOf(id)
         @tailrec def it(at: Int, step: Int): Int =
           if (at >= 0 && at < numEntries && keyAt(at) == targetKey) it(at + step, step)
@@ -252,34 +252,34 @@ object Index {
       def find(id: Hash): (Int, Int) = {
         val targetKey = prefixOf(id)
 
-        def interpolate(left: Int, right: Int): Int = {
-          val leftKey = keyAt(left)
-          val rightKey = keyAt(right)
-          left + ((targetKey - leftKey).toFloat * (right - left) / (rightKey - leftKey)).toInt
-        }
+        def interpolate(leftIndex: Int, leftKey: Long, rightIndex: Int, rightKey: Long): Int =
+          leftIndex + ((targetKey - leftKey).toFloat * (rightIndex - leftIndex) / (rightKey - leftKey)).toInt
 
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
-        @tailrec def rec(leftIndex: Int, rightIndex: Int, step: Int, trace: Boolean = false): (Int, Int) = {
+        @tailrec def rec(leftIndex: Int, leftKey: Long, rightIndex: Int, rightKey: Long, step: Int, trace: Boolean = false): (Int, Int) = {
           val guess =
-            if (step < 10) interpolate(leftIndex, rightIndex) // interpolation
+            if (step < 10) interpolate(leftIndex, leftKey, rightIndex, rightKey) // interpolation
             else (leftIndex + rightIndex) / 2 // binary search
           val guessKey = keyAt(guess)
           if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
           if (guessKey == targetKey) (guess, step)
           else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
           else if (step > 50) // 10 + log2(numEntries)
-            if (!trace) rec(0, numEntries - 1, 1, trace = true)
+            // debug if we never got a result
+            if (!trace) rec(0, keyAt(0), numEntries - 1, keyAt(numEntries - 1), 1, trace = true)
             else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
           else {
             val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
+            val newLeftKey = if (targetKey < guessKey) leftKey else keyAt(guess + 1)
             val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
+            val newRightKey = if (targetKey < guessKey) keyAt(guess - 1) else rightKey
 
-            rec(newLeft, newRight, step + 1, trace)
+            rec(newLeft, newLeftKey, newRight, newRightKey, step + 1, trace)
           }
         }
 
-        rec(0, numEntries - 1, 1)
+        rec(0, keyAt(0), numEntries - 1, keyAt(numEntries - 1), 1)
       }
     }
   }
