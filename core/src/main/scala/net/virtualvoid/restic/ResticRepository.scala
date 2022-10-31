@@ -162,15 +162,17 @@ class ResticRepository(
   def readBlobFile(location: FileLocation, uncompressed: Option[Int]): Future[Array[Byte]] =
     readBlobFilePlain(location)
       .map(decryptBlob)
-      .map(decompress(uncompressed))
+      .map(decompress(uncompressed)(_, 0))
 
-  def decompress(uncompressed: Option[Int])(compressedData: Array[Byte]): Array[Byte] =
+  def decompress(uncompressed: Option[Int])(compressedData: Array[Byte], offset: Int): Array[Byte] =
     if (uncompressed.isDefined) {
       val us0 = uncompressed.get
-      val uncompressedSize = if (us0 >= 0) us0 else ZstdDecompressor.getDecompressedSize(compressedData, 0, compressedData.length).toInt
+      val uncompressedSize = if (us0 >= 0) us0 else ZstdDecompressor.getDecompressedSize(compressedData, offset, compressedData.length - offset).toInt
       require(uncompressedSize >= 0, s"uncompressed: $uncompressed compressed: ${compressedData.size}")
       val buffer = new Array[Byte](uncompressedSize)
-      val size = decompressor.get().decompress(compressedData, 0, compressedData.length, buffer, 0, buffer.length)
+      val d = decompressor.get()
+      val size = d.decompress(compressedData, offset, compressedData.length - offset, buffer, 0, buffer.length)
+
       require(size == buffer.length)
       buffer
     } else
@@ -314,25 +316,26 @@ class ResticRepository(
 
   def readJson[T: JsonFormat](location: FileLocation, compressionType: CompressionType = CompressionType.Tagged): Future[T] =
     readBlobFile(location, uncompressed = None) // will be dealt with afterwards
-      .map { data0 =>
-        val (uncompressedSize, data1) = compressionType match {
-          case CompressionType.Uncompressed  => (None, data0)
-          case CompressionType.Compressed(i) => (Some(i), data0)
-          case CompressionType.Tagged =>
-            data0(0) match {
-              case 1           => (None, data0.drop(1))
-              case 2           => (Some(-1), data0.drop(1))
-              case 0x5b | 0x7b => (None, data0) // backwards compatible detection of no compression (start of JSON document)
-            }
-        }
-        val data =
-          if (uncompressedSize.isDefined)
-            decompress(uncompressedSize)(data1)
-          else
-            data1
+      .map(decompressToString(_, compressionType))
+      .map(_.parseJson)
+      .map(_.convertTo[T])
 
-        new String(data, "utf8").parseJson.convertTo[T]
-      }
+  def decompressToString(data0: Array[Byte], compressionType: CompressionType = CompressionType.Tagged): String = {
+    val (uncompressedSize, offset) = compressionType match {
+      case CompressionType.Uncompressed  => (None, 0)
+      case CompressionType.Compressed(i) => (Some(i), 0)
+      case CompressionType.Tagged =>
+        data0(0) match {
+          case 1           => (None, 1)
+          case 2           => (Some(-1), 1)
+          case 0x5b | 0x7b => (None, 0) // backwards compatible detection of no compression (start of JSON document)
+        }
+    }
+    if (uncompressedSize.isDefined)
+      new String(decompress(uncompressedSize)(data0, offset), "utf8")
+    else
+      new String(data0, offset, data0.length - offset, "utf8")
+  }
 
   def allSnapshots(): Source[(Hash, Snapshot), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "snapshots")).toVector)
