@@ -108,12 +108,42 @@ class ResticRepository(
     res.mkdirs()
     res
   }
+  def index[T: Serializer](indexFile: File, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] = {
+    val inFile = new File(indexFile.getAbsoluteFile + ".in")
+    def recreateIndex(): Future[Index[T]] = {
+      val idx = Index.createIndex(indexFile, indexData)
+      Utils.writeString(inFile, baseData)
+      idx
+    }
+
+    if (!indexFile.exists() || !inFile.exists()) {
+      Console.err.println(s"[${indexFile.getName}] Index missing. Starting rebuild...")
+      recreateIndex()
+    } else {
+      val expectedIn = Utils.readString(inFile)
+      if (expectedIn == baseData) // index still valid
+        Future.successful(Index.load(indexFile))
+      else {
+        Console.err.println(s"[${indexFile.getName}] Index invalidated. Starting rebuild...")
+        recreateIndex()
+      }
+    }
+  }
+
+  // Full set of all index files guards our indices. Indices need to be rebuilt when set of index
+  // files changes.
+  lazy val stateString: String =
+    ResticRepository.allFiles(new File(repoDir, "index"))
+      .map(_.getName)
+      .toSeq
+      .sorted
+      .mkString
+
   val blob2PackIndexFile = new File(localCacheDir, "blob2pack.idx")
 
   private implicit val packEntrySerializer = PackBlobSerializer
   lazy val blob2packIndex: Future[Index[PackEntry]] =
-    if (blob2PackIndexFile.exists()) Future.successful(Index.load(blob2PackIndexFile))
-    else Index.createIndex(blob2PackIndexFile, allIndexEntries)
+    index(blob2PackIndexFile, stateString, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
@@ -128,8 +158,7 @@ class ResticRepository(
   val pack2indexIndexFile = new File(localCacheDir, "pack2index.idx")
   private implicit val hashSerializer = HashSerializer
   private lazy val pack2indexIndex: Future[Index[Hash]] =
-    if (pack2indexIndexFile.exists()) Future.successful(Index.load(pack2indexIndexFile))
-    else Index.createIndex(pack2indexIndexFile, allPack2IndexEntries)
+    index(pack2indexIndexFile, stateString, allPack2IndexEntries)
 
   def allPack2IndexEntries: Source[(Hash, Hash), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))

@@ -69,17 +69,14 @@ object BackReferences {
 
       lazy val backrefIndex: Future[Index[BackReference]] =
         reader.blob2packIndex.flatMap { i =>
-          if (!backrefIndexFile.exists()) {
-            val treeSource: Source[(Hash, BackReference), Any] =
-              Source(i.allValues)
-                .filter(_.isTree)
-                .mapAsync(1024)(treeBackReferences)
-                .async
-                .mapConcat(identity)
-                .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
-
-            Index.createIndex(backrefIndexFile, treeSource)
-          } else Future.successful(Index.load[BackReference](backrefIndexFile))
+          def allBackReferences: Source[(Hash, BackReference), Any] =
+            Source(i.allValues)
+              .filter(_.isTree)
+              .mapAsync(1024)(treeBackReferences)
+              .async
+              .mapConcat(identity)
+              .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
+          reader.index(backrefIndexFile, reader.stateString, allBackReferences)
         }
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =
