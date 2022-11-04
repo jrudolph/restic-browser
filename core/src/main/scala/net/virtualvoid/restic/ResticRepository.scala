@@ -134,12 +134,15 @@ class ResticRepository(
 
   // Full set of all index files guards our indices. Indices need to be rebuilt when set of index
   // files changes.
-  lazy val stateString: String =
-    ResticRepository.allFiles(new File(repoDir, "index"))
-      .map(_.getName)
-      .toSeq
-      .sorted
-      .mkString
+  lazy val stateString: String = {
+    val allIndexHashes =
+      ResticRepository.allFiles(new File(repoDir, "index"))
+        .map(_.getName)
+        .toSeq
+        .sorted
+        .mkString("\n")
+    Utils.sha256sum(allIndexHashes)
+  }
 
   val blob2PackIndexFile = new File(localCacheDir, "blob2pack.idx")
 
