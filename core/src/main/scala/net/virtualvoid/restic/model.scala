@@ -208,6 +208,10 @@ case class PackInfo(
 ) {
   def totalElements: Int = trees + blobs
 }
+object PackInfo {
+  import spray.json.DefaultJsonProtocol._
+  implicit val infoFormat: JsonFormat[PackInfo] = jsonFormat5(PackInfo.apply _)
+}
 
 case class Snapshot(
     time:     ZonedDateTime,

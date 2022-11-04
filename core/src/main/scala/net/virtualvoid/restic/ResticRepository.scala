@@ -109,14 +109,16 @@ class ResticRepository(
     res
   }
 
-  def cached[T](cacheFile: File, baseData: String, createCacheFile: File => T, loadCacheFile: File => T): T = {
+  def cached[T](cacheFileName: String, baseData: String, createCacheFile: File => Future[T], loadCacheFile: File => Future[T]): Future[T] = {
+    val cacheFile = new File(localCacheDir, cacheFileName)
     val inFile = new File(cacheFile.getAbsoluteFile + ".in")
-    def recreateIndex(): T = {
+    def recreateIndex(): Future[T] = {
       cacheFile.delete()
       inFile.delete()
-      val res = createCacheFile(cacheFile)
-      Utils.writeString(inFile, baseData)
-      res
+      createCacheFile(cacheFile).map { res =>
+        Utils.writeString(inFile, baseData)
+        res
+      }
     }
 
     if (!cacheFile.exists() || !inFile.exists()) {
@@ -132,12 +134,25 @@ class ResticRepository(
       }
     }
   }
-  def index[T: Serializer](indexFile: File, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] =
-    cached(indexFile, baseData, f => Index.createIndex(f, indexData), f => Future.successful(Index.load(f)))
+  def cachedIndex[T: Serializer](indexName: String, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] =
+    cached(s"$indexName.idx", baseData, f => Index.createIndex(f, indexData), f => Future.successful(Index.load(f)))
+
+  def cachedJson[T: JsonFormat](cacheName: String, baseData: String, createData: () => Future[T]): Future[T] =
+    cached(
+      s"$cacheName.json.gz",
+      baseData,
+      { f =>
+        createData().map { data =>
+          Utils.writeStringGzipped(f, data.toJson.compactPrint)
+          data
+        }
+      },
+      f => Future.successful(Utils.readStringGzipped(f).parseJson.convertTo[T])
+    )
 
   // Full set of all index files guards our indices. Indices need to be rebuilt when set of index
   // files changes.
-  lazy val stateString: String = {
+  lazy val indexStateString: String = {
     val allIndexHashes =
       ResticRepository.allFiles(new File(repoDir, "index"))
         .map(_.getName)
@@ -147,11 +162,9 @@ class ResticRepository(
     Utils.sha256sum(allIndexHashes)
   }
 
-  val blob2PackIndexFile = new File(localCacheDir, "blob2pack.idx")
-
   private implicit val packEntrySerializer = PackBlobSerializer
   lazy val blob2packIndex: Future[Index[PackEntry]] =
-    index(blob2PackIndexFile, stateString, allIndexEntries)
+    cachedIndex("blob2pack", indexStateString, allIndexEntries)
 
   private def allIndexEntries: Source[(Hash, PackEntry), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
@@ -163,10 +176,9 @@ class ResticRepository(
   def packEntryFor(blob: Hash): Future[PackEntry] =
     blob2packIndex.map(_.lookup(blob))
 
-  val pack2indexIndexFile = new File(localCacheDir, "pack2index.idx")
   private implicit val hashSerializer = HashSerializer
   private lazy val pack2indexIndex: Future[Index[Hash]] =
-    index(pack2indexIndexFile, stateString, allPack2IndexEntries)
+    cachedIndex("pack2index", indexStateString, allPack2IndexEntries)
 
   def allPack2IndexEntries: Source[(Hash, Hash), Any] =
     Source(ResticRepository.allFiles(new File(repoDir, "index")))
@@ -186,15 +198,19 @@ class ResticRepository(
 
   def allPackIds: Future[Seq[Hash]] = pack2indexIndex.map(_.allKeys)
 
-  lazy val packInfos: Future[Seq[PackInfo]] =
-    Source(ResticRepository.allFiles(new File(repoDir, "index")))
-      .mapAsync(1) { f =>
-        val h = Hash(f.getName)
-        loadIndex(h).map(_.allInfos)
-      }
-      .mapConcat(identity)
-      .runWith(Sink.seq)
-      .map(_.sortBy(_.id))
+  lazy val packInfos: Future[Seq[PackInfo]] = {
+    def createInfos(): Future[Seq[PackInfo]] =
+      Source(ResticRepository.allFiles(new File(repoDir, "index")))
+        .mapAsync(1) { f =>
+          val h = Hash(f.getName)
+          loadIndex(h).map(_.allInfos)
+        }
+        .mapConcat(identity)
+        .runWith(Sink.seq)
+        .map(_.sortBy(_.id))
+    import spray.json.DefaultJsonProtocol._
+    cachedJson("packinfos", indexStateString, createInfos)
+  }
 
   lazy val backreferences = BackReferences(this)
 

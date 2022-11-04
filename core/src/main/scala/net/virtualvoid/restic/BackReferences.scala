@@ -65,8 +65,6 @@ object BackReferences {
           .map(s => s._2.tree -> SnapshotReference(s._1))
           .runWith(Sink.seq[(Hash, SnapshotReference)])
 
-      val backrefIndexFile = new File(reader.localCacheDir, "backrefs.idx")
-
       lazy val backrefIndex: Future[Index[BackReference]] =
         reader.blob2packIndex.flatMap { i =>
           def allBackReferences: Source[(Hash, BackReference), Any] =
@@ -76,7 +74,7 @@ object BackReferences {
               .async
               .mapConcat(identity)
               .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
-          reader.index(backrefIndexFile, reader.stateString, allBackReferences)
+          reader.cachedIndex("backrefs", reader.indexStateString, allBackReferences)
         }
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =
