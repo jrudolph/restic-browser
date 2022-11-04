@@ -111,6 +111,8 @@ class ResticRepository(
   def index[T: Serializer](indexFile: File, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] = {
     val inFile = new File(indexFile.getAbsoluteFile + ".in")
     def recreateIndex(): Future[Index[T]] = {
+      indexFile.delete()
+      inFile.delete()
       val idx = Index.createIndex(indexFile, indexData)
       Utils.writeString(inFile, baseData)
       idx
