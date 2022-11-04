@@ -167,22 +167,46 @@ case class PackBlob(
   def isCompressed: Boolean = uncompressed_length.isDefined
   def toEntryOf(pack: Hash): PackEntry =
     PackEntry(pack, id, `type`, offset, length, uncompressed_length)
+
+  def uncompressedLength: Int = uncompressed_length.getOrElse(length)
 }
 case class PackIndex(
     id:    Hash,
     blobs: Vector[PackBlob]
-)
+) {
+  def toPackInfo: PackInfo = {
+    PackInfo(
+      id,
+      blobs.map(_.length.toLong).sum,
+      blobs.map(b => b.uncompressedLength.toLong).sum,
+      blobs.count(_.isTree),
+      blobs.count(_.isData)
+    )
+  }
+}
 case class IndexFile(
     supersedes: Option[Seq[Hash]],
     packs:      Seq[PackIndex]
 ) {
   def realSupersedes = supersedes.getOrElse(Nil)
+  def allInfos: Seq[PackInfo] = packs.map(_.toPackInfo)
 }
 object IndexFile {
   import spray.json.DefaultJsonProtocol._
   implicit val packBlobFormat = jsonFormat5(PackBlob.apply _)
   implicit val packIndexFormat = jsonFormat2(PackIndex.apply _)
   implicit val indexFileFormat = jsonFormat2(IndexFile.apply _)
+}
+
+// A summary of information contained in a pack file
+case class PackInfo(
+    id:               Hash,
+    size:             Long,
+    uncompressedSize: Long,
+    trees:            Int,
+    blobs:            Int
+) {
+  def totalElements: Int = trees + blobs
 }
 
 case class Snapshot(

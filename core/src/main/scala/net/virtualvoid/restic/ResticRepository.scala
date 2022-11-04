@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.stream.OverflowStrategy
 import akka.stream.alpakka.file.ArchiveMetadata
 import akka.stream.alpakka.file.scaladsl.Archive
-import akka.stream.scaladsl.Source
+import akka.stream.scaladsl.{ Sink, Source }
 import akka.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
@@ -180,6 +180,18 @@ class ResticRepository(
       map <- pack2indexIndex
       indexFile <- loadIndex(map.lookup(packHash))
     } yield indexFile.packs.find(_.id == packHash).get
+
+  def allPackIds: Future[Seq[Hash]] = pack2indexIndex.map(_.allKeys)
+
+  lazy val packInfos: Future[Seq[PackInfo]] =
+    Source(ResticRepository.allFiles(new File(repoDir, "index")))
+      .mapAsync(1) { f =>
+        val h = Hash(f.getName)
+        loadIndex(h).map(_.allInfos)
+      }
+      .mapConcat(identity)
+      .runWith(Sink.seq)
+      .map(_.sortBy(_.id))
 
   lazy val backreferences = BackReferences(this)
 

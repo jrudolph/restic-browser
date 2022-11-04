@@ -16,7 +16,7 @@
 @for(snap <- snapshotInfos.sortBy(x => (-x.snapshots.size, x.host, x.paths.headOption))) {
     <tr>
         <td><a href="/host/@{snap.host}/">@{snap.host}</a></td>
-        <td>@{snap.paths.mkString(", ")}</td>
+        <td><a href="/host/@{snap.host}@{snap.paths.mkString(", ")}">@{snap.paths.mkString(", ")}</a></td>
         <td>@{snap.tags.mkString(", ")}</td>
         <td>@{snap.snapshots.size}</td>
     </tr>

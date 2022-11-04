@@ -1,0 +1,32 @@
+@import net.virtualvoid.restic._
+
+@(indices: Seq[PackInfo])
+
+<h2>Packs</h2>
+
+<table>
+    <tr><th>Count</th><td class="num-cell">@{indices.size}</td></tr>
+    <tr><th>Total Size</th><td class="num-cell">@{indices.map(_.size).sum}</td></tr>
+    <tr><th>Trees</th><td class="num-cell">@{indices.map(_.trees).sum}</td></tr>
+    <tr><th>Blobs</th><td class="num-cell">@{indices.map(_.blobs).sum}</td></tr>
+    <tr><th>Total</th><td class="num-cell">@{indices.map(_.totalElements).sum}</td></tr>
+</table>
+
+<table>
+    <tr>
+        <th>Id</th>
+        <th>Size</th>
+        <th>Uncompressed Size</th>
+        <th>Trees</th>
+        <th>Blobs</th>
+    </tr>
+    @for(idx <- indices) {
+        <tr>
+            <td><a href="/pack/@{idx.id}">@{idx.id.short}</a></td>
+            <td class="num-cell">@{idx.size}</td>
+            <td class="num-cell">@{idx.uncompressedSize}</td>
+            <td class="num-cell">@{idx.trees}</td>
+            <td class="num-cell">@{idx.blobs}</td>
+        </tr>
+    }
+</table>

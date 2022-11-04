@@ -12,14 +12,6 @@
 </table>
 <h3>Blobs</h3>
 
-<!--
-id:                  Hash,
-    `type`:              BlobType,
-    offset:              Long,
-    length:              Int,
-    uncompressed_length: Option[Int]
--->
-
 <table>
     <tr><th>Id</th><th>Type</th><th>Offset</th><th>Length</th><th>Uncompressed Length</th><th>Compression Factor</th></tr>
     @for(blob <- idx.blobs.sortBy(_.offset)) {

@@ -2,7 +2,7 @@ package net.virtualvoid.restic
 package web
 
 import akka.http.scaladsl.model.headers.ContentDispositionTypes
-import akka.http.scaladsl.model.{ ContentType, ContentTypes, HttpCharsets, HttpEntity, MediaTypes, headers }
+import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.scaladsl.Sink
@@ -34,7 +34,11 @@ class ResticRoutes(reader: ResticRepository) {
         },
         pathPrefix("pack") {
           concat(
-            //pathEndOrSingleSlash
+            pathEndOrSingleSlash {
+              onSuccess(reader.packInfos) { infos =>
+                complete(html.packs(infos))
+              }
+            },
             path(Segment) { h =>
               val hash = Hash(h)
               onSuccess(reader.packIndexFor(hash)) { idx =>
