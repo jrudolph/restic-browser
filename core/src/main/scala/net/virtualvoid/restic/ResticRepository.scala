@@ -108,29 +108,32 @@ class ResticRepository(
     res.mkdirs()
     res
   }
-  def index[T: Serializer](indexFile: File, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] = {
-    val inFile = new File(indexFile.getAbsoluteFile + ".in")
-    def recreateIndex(): Future[Index[T]] = {
-      indexFile.delete()
+
+  def cached[T](cacheFile: File, baseData: String, createCacheFile: File => T, loadCacheFile: File => T): T = {
+    val inFile = new File(cacheFile.getAbsoluteFile + ".in")
+    def recreateIndex(): T = {
+      cacheFile.delete()
       inFile.delete()
-      val idx = Index.createIndex(indexFile, indexData)
+      val res = createCacheFile(cacheFile)
       Utils.writeString(inFile, baseData)
-      idx
+      res
     }
 
-    if (!indexFile.exists() || !inFile.exists()) {
-      Console.err.println(s"[${indexFile.getName}] Index missing. Starting rebuild...")
+    if (!cacheFile.exists() || !inFile.exists()) {
+      Console.err.println(s"[${cacheFile.getName}] Cache missing. Starting rebuild...")
       recreateIndex()
     } else {
       val expectedIn = Utils.readString(inFile)
       if (expectedIn == baseData) // index still valid
-        Future.successful(Index.load(indexFile))
+        loadCacheFile(cacheFile)
       else {
-        Console.err.println(s"[${indexFile.getName}] Index invalidated. Starting rebuild...")
+        Console.err.println(s"[${cacheFile.getName}] Cache invalidated. Starting rebuild...")
         recreateIndex()
       }
     }
   }
+  def index[T: Serializer](indexFile: File, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] =
+    cached(indexFile, baseData, f => Index.createIndex(f, indexData), f => Future.successful(Index.load(f)))
 
   // Full set of all index files guards our indices. Indices need to be rebuilt when set of index
   // files changes.
