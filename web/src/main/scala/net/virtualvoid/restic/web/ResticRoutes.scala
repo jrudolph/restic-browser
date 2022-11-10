@@ -4,7 +4,7 @@ package web
 import akka.http.scaladsl.model.headers.ContentDispositionTypes
 import akka.http.scaladsl.model._
 import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server.Route
+import akka.http.scaladsl.server.{ Directive1, Route }
 import akka.stream.scaladsl.Sink
 import akka.util.ByteString
 
@@ -56,15 +56,21 @@ class ResticRoutes(reader: ResticRepository) {
                 case None =>
                   parameter("json".?) {
                     case None =>
-                      (onSuccess(reader packEntryFor (hash)) & onSuccess(reader.backreferences.chainsFor(hash))) { (pE, chains) =>
-                        val cs = chainSetForChains(chains)
+                      onSuccess(reader packEntryFor (hash)) { pE =>
+                        def chainSet(shouldBeBlanked: Boolean = false): Directive1[ChainSet] =
+                          if (shouldBeBlanked) provide(ChainSet(Nil))
+                          else onSuccess(reader.backreferences.chainsFor(hash)).map(chainSetForChains)
                         pE.`type` match {
                           case BlobType.Tree =>
                             onSuccess(reader.loadTree(pE)) { t =>
-                              complete(html.tree(pE.packId, hash, t, cs))
+                              chainSet(t.nodes.isEmpty) { cs => // do not calculate ChainSet for empty trees (because it is huge)
+                                complete(html.tree(pE.packId, hash, t, cs))
+                              }
                             }
                           case BlobType.Data =>
-                            complete(html.chunk(pE, cs))
+                            chainSet() { cs =>
+                              complete(html.chunk(pE, cs))
+                            }
                         }
                       }
                     case Some(_) =>
