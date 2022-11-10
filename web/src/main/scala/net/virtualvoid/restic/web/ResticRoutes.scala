@@ -121,7 +121,7 @@ class ResticRoutes(reader: ResticRepository) {
             }
           )
         },
-        (pathPrefix("host" / Segment / Segments) & pathEndOrSingleSlash) { (host, segments) =>
+        (pathPrefix("host" / Segment / Segments) & redirectToTrailingSlashIfMissing(StatusCodes.Found)) { (host, segments) =>
           val snapsF = snapshots.runWith(Sink.seq)
           onSuccess(snapsF) { snaps0 =>
             val snaps = snaps0.map(_._2)
