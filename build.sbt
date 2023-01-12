@@ -1,12 +1,12 @@
 
-val scalaV = "2.13.8"
+val scalaV = "2.13.10"
 
-val akkaV = "2.6.19"
-val akkaHttpV = "10.2.9"
+val akkaV = "2.6.20"
+val akkaHttpV = "10.2.10"
 val alpakkaV = "4.0.0"
 val sprayJsonV = "1.3.6"
 
-val scalaTestV = "3.2.11"
+val scalaTestV = "3.2.15"
 
 val aircompressorV = "0.21"
 
