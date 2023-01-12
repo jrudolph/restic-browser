@@ -233,13 +233,24 @@ class ResticRepository(
     if (uncompressed.isDefined) {
       val us0 = uncompressed.get
       val uncompressedSize = if (us0 >= 0) us0 else ZstdDecompressor.getDecompressedSize(compressedData, offset, compressedData.length - offset).toInt
-      require(uncompressedSize >= 0, s"uncompressed: $uncompressed compressed: ${compressedData.size}")
-      val buffer = new Array[Byte](uncompressedSize)
-      val d = decompressor.get()
-      val size = d.decompress(compressedData, offset, compressedData.length - offset, buffer, 0, buffer.length)
 
-      require(size == buffer.length)
-      buffer
+      if (uncompressedSize >= 0) {
+        require(uncompressedSize >= 0, s"Could not estimate uncompressed size. uncompressed: $uncompressed compressed: ${compressedData.size}")
+        val buffer = new Array[Byte](uncompressedSize)
+        val d = decompressor.get()
+        val size = d.decompress(compressedData, offset, compressedData.length - offset, buffer, 0, buffer.length)
+
+        require(size == buffer.length)
+        buffer
+      } else {
+        println(s"[WARN] Could not estimate uncompressed size. uncompressed: $uncompressed compressed: ${compressedData.size}")
+        val buffer = new Array[Byte](math.min(100000, compressedData.size * 10))
+        val d = decompressor.get()
+        val size = d.decompress(compressedData, offset, compressedData.length - offset, buffer, 0, buffer.length)
+
+        require(size < buffer.length)
+        buffer.take(size)
+      }
     } else
       compressedData
 
