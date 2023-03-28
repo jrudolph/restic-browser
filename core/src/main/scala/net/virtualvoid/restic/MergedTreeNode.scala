@@ -3,7 +3,7 @@ package net.virtualvoid.restic
 import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
 import scala.concurrent.Future
 import MergedTreeNode.convertToInterval
-import akka.stream.scaladsl.{ Sink, Source }
+import org.apache.pekko.stream.scaladsl.{ Sink, Source }
 
 case class SnapshotSet(snapshots: Seq[Snapshot]) {
   def firstSeen: ZonedDateTime = snapshots.map(_.time).min

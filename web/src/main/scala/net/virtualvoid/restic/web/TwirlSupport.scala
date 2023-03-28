@@ -1,8 +1,8 @@
 package net.virtualvoid.restic.web
 
-import akka.http.scaladsl.marshalling.{ Marshaller, ToEntityMarshaller }
-import akka.http.scaladsl.model.MediaTypes._
-import akka.http.scaladsl.model.MediaType
+import org.apache.pekko.http.scaladsl.marshalling.{ Marshaller, ToEntityMarshaller }
+import org.apache.pekko.http.scaladsl.model.MediaTypes._
+import org.apache.pekko.http.scaladsl.model.MediaType
 import play.twirl.api.{ Xml, Txt, Html }
 
 // copied from https://github.com/btomala/akka-http-twirl/blob/master/src/main/scala/akkahttptwirl/TwirlSupport.scala

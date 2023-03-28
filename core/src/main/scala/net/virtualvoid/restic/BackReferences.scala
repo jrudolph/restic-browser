@@ -1,8 +1,8 @@
 package net.virtualvoid.restic
 
-import akka.http.caching.LfuCache
-import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
-import akka.stream.scaladsl.{ Sink, Source }
+import org.apache.pekko.http.caching.LfuCache
+import org.apache.pekko.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
+import org.apache.pekko.stream.scaladsl.{ Sink, Source }
 
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong

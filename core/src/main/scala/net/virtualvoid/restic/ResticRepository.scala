@@ -1,11 +1,11 @@
 package net.virtualvoid.restic
 
-import akka.actor.ActorSystem
-import akka.stream.OverflowStrategy
-import akka.stream.alpakka.file.ArchiveMetadata
-import akka.stream.alpakka.file.scaladsl.Archive
-import akka.stream.scaladsl.{ Sink, Source }
-import akka.util.ByteString
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.stream.OverflowStrategy
+import org.apache.pekko.stream.connectors.file.ArchiveMetadata
+import org.apache.pekko.stream.connectors.file.scaladsl.Archive
+import org.apache.pekko.stream.scaladsl.{ Sink, Source }
+import org.apache.pekko.util.ByteString
 import io.airlift.compress.zstd.ZstdDecompressor
 import spray.json._
 

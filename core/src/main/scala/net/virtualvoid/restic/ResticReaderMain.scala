@@ -1,11 +1,11 @@
 package net.virtualvoid.restic
 
-import akka.NotUsed
-import akka.actor.ActorSystem
-import akka.http.caching.LfuCache
-import akka.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
-import akka.stream.scaladsl.{ Sink, Source }
-import akka.util.ByteString
+import org.apache.pekko.NotUsed
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.caching.LfuCache
+import org.apache.pekko.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
+import org.apache.pekko.stream.scaladsl.{ Sink, Source }
+import org.apache.pekko.util.ByteString
 import com.github.benmanes.caffeine.cache.Caffeine
 import net.virtualvoid.restic.ResticReaderMain.reader
 

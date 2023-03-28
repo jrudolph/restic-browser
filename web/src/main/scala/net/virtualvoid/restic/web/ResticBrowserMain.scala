@@ -1,8 +1,8 @@
 package net.virtualvoid.restic
 package web
 
-import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.scaladsl.Http
 
 object ResticBrowserMain extends App {
   implicit val system = ActorSystem()

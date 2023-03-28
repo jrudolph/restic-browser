@@ -1,9 +1,9 @@
 
 val scalaV = "2.13.10"
 
-val akkaV = "2.6.20"
-val akkaHttpV = "10.2.10"
-val alpakkaV = "4.0.0"
+val pekkoV = "0.0.0+26623-85c2a469-SNAPSHOT"
+val pekkoHttpV = "0.0.0+4336-6d7fa0e0-SNAPSHOT"
+val pekkoConnectorsV = "0.0.0+62-041915c9-SNAPSHOT"
 val sprayJsonV = "1.3.6"
 
 val scalaTestV = "3.2.15"
@@ -11,7 +11,8 @@ val scalaTestV = "3.2.15"
 val aircompressorV = "0.21"
 
 inThisBuild(Def.settings(
-  scalaVersion := scalaV
+  scalaVersion := scalaV,
+  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/"
 ))
 
 lazy val root = Project(id = "root", base = file(".")).aggregate(core, web)
@@ -20,9 +21,9 @@ lazy val core =
   project
     .settings(
       libraryDependencies ++= Seq(
-        "com.typesafe.akka" %% "akka-stream" % akkaV,
-        "com.typesafe.akka" %% "akka-http-caching" % akkaHttpV,
-        "com.lightbend.akka" %% "akka-stream-alpakka-file" % alpakkaV,
+        "org.apache.pekko" %% "pekko-stream" % pekkoV,
+        "org.apache.pekko" %% "pekko-http-caching" % pekkoHttpV,
+        "org.apache.pekko" %% "pekko-connectors-file" % pekkoConnectorsV,
         "io.spray" %% "spray-json" % sprayJsonV,
         "io.airlift" % "aircompressor" % aircompressorV,
         "com.lambdaworks" % "scrypt" % "1.4.0",
@@ -55,7 +56,7 @@ lazy val web =
     .enablePlugins(SbtTwirl, BuildInfoPlugin)
     .settings(
       libraryDependencies ++= Seq(
-        "com.typesafe.akka" %% "akka-http" % akkaHttpV,
+        "org.apache.pekko" %% "pekko-http" % pekkoHttpV,
         "org.scalatest" %% "scalatest" % scalaTestV % "test",
       ),
       // Fix broken watchSources support in play/twirl, https://github.com/playframework/twirl/issues/186

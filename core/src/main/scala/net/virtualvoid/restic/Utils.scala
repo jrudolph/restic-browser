@@ -1,6 +1,6 @@
 package net.virtualvoid.restic
 
-import akka.util.ByteString
+import org.apache.pekko.util.ByteString
 
 import java.io.{ File, FileInputStream, FileOutputStream, InputStream, OutputStream }
 import java.security.MessageDigest

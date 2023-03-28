@@ -1,7 +1,7 @@
 package net.virtualvoid.restic
 
-import akka.stream.Materializer
-import akka.stream.scaladsl.Source
+import org.apache.pekko.stream.Materializer
+import org.apache.pekko.stream.scaladsl.Source
 
 import java.io.{ BufferedOutputStream, File, FileOutputStream, OutputStream }
 import java.nio.ByteOrder

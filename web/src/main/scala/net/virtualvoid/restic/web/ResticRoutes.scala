@@ -1,12 +1,12 @@
 package net.virtualvoid.restic
 package web
 
-import akka.http.scaladsl.model.headers.ContentDispositionTypes
-import akka.http.scaladsl.model._
-import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server.{ Directive1, Route }
-import akka.stream.scaladsl.Sink
-import akka.util.ByteString
+import org.apache.pekko.http.scaladsl.model.headers.ContentDispositionTypes
+import org.apache.pekko.http.scaladsl.model._
+import org.apache.pekko.http.scaladsl.server.Directives._
+import org.apache.pekko.http.scaladsl.server.{ Directive1, Route }
+import org.apache.pekko.stream.scaladsl.Sink
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Future
 
