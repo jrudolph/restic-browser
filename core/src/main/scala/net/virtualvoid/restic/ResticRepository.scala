@@ -137,6 +137,45 @@ class ResticRepository(
   def cachedIndex[T: Serializer](indexName: String, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] =
     cached(s"$indexName.idx", baseData, f => Index.createIndex(f, indexData), f => Future.successful(Index.load(f)))
 
+  def cachedIndexFromBaseElements[T: Serializer](indexName: String, baseData: Seq[String], indexData: Seq[String] => Source[(Hash, T), Any]): Future[Index[T]] = {
+    def inFileFor(cacheFile: File): File = new File(cacheFile.getAbsolutePath + ".in")
+    val cacheFiles = localCacheDir.listFiles().filter(f => f.getName.startsWith(s"$indexName.idx") && !f.getName.contains(".in") && f.getName.last.isDigit).toSeq
+    val inFiles = cacheFiles.map(inFileFor)
+    def recreateCompleteIndex(): Future[Index[T]] = {
+      cacheFiles.foreach(_.delete())
+      inFiles.foreach(_.delete())
+      cachedIndexFromBaseElements(indexName, baseData, indexData)
+    }
+    def loadInData(inFile: File): Seq[String] =
+      scala.io.Source.fromFile(inFile).getLines().toVector
+
+    val baseSet = baseData.toSet
+    val inDatas = inFiles.flatMap(loadInData).toSet
+    val allDataIndexed = inDatas.intersect(baseSet) == baseSet
+    val tooMuchDataSet = inDatas.diff(baseSet)
+
+    if (tooMuchDataSet.nonEmpty) {
+      Console.err.println(s"[$indexName] Index has ${tooMuchDataSet.size} outdated elements, rebuilding completely.")
+      recreateCompleteIndex()
+    } else if (allDataIndexed) {
+      Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, loading.")
+      Future.successful(Index.composite(cacheFiles.map(f => Index.load(f))))
+    } else {
+      // create new partial index (or merge if necessary)
+      val newSet = baseSet.diff(inDatas)
+      val newFile = new File(localCacheDir, s"$indexName.idx.${cacheFiles.size}")
+      val newInFile = inFileFor(newFile)
+
+      Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts is missing data from ${newSet.size} base elements. Creating new index part.")
+
+      Index.createIndex(newFile, indexData(newSet.toSeq))
+        .flatMap { res =>
+          Utils.writeString(newInFile, baseData.mkString("\n"))
+          cachedIndexFromBaseElements(indexName, baseData, indexData)
+        }
+    }
+  }
+
   def cachedJson[T: JsonFormat](cacheName: String, baseData: String, createData: () => Future[T]): Future[T] =
     cached(
       s"$cacheName.json.gz",
@@ -150,13 +189,13 @@ class ResticRepository(
       f => Future.successful(Utils.readStringGzipped(f).parseJson.convertTo[T])
     )
 
+  lazy val allIndexFileNames = ResticRepository.allFiles(new File(repoDir, "index")).map(_.getName).toSeq
+
   // Full set of all index files guards our indices. Indices need to be rebuilt when set of index
   // files changes.
   lazy val indexStateString: String = {
     val allIndexHashes =
-      ResticRepository.allFiles(new File(repoDir, "index"))
-        .map(_.getName)
-        .toSeq
+      allIndexFileNames
         .sorted
         .mkString("\n")
     Utils.sha256sum(allIndexHashes)
@@ -164,11 +203,11 @@ class ResticRepository(
 
   private implicit val packEntrySerializer = PackBlobSerializer
   lazy val blob2packIndex: Future[Index[PackEntry]] =
-    cachedIndex("blob2pack", indexStateString, allIndexEntries)
+    cachedIndexFromBaseElements("blob2pack", allIndexFileNames, indexEntries)
 
-  private def allIndexEntries: Source[(Hash, PackEntry), Any] =
-    Source(ResticRepository.allFiles(new File(repoDir, "index")))
-      .mapAsync(8)(f => loadIndex(Hash(f.getName)))
+  private def indexEntries(indices: Seq[String]): Source[(Hash, PackEntry), Any] =
+    Source(indices)
+      .mapAsync(8)(idx => loadIndex(Hash(idx)))
       .mapConcat { packIndex =>
         packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
@@ -178,12 +217,12 @@ class ResticRepository(
 
   private implicit val hashSerializer = HashSerializer
   private lazy val pack2indexIndex: Future[Index[Hash]] =
-    cachedIndex("pack2index", indexStateString, allPack2IndexEntries)
+    cachedIndexFromBaseElements("pack2index", allIndexFileNames, allPack2IndexEntries)
 
-  def allPack2IndexEntries: Source[(Hash, Hash), Any] =
-    Source(ResticRepository.allFiles(new File(repoDir, "index")))
-      .mapAsync(1) { f =>
-        val h = Hash(f.getName)
+  def allPack2IndexEntries(indices: Seq[String]): Source[(Hash, Hash), Any] =
+    Source(indices)
+      .mapAsync(1) { idx =>
+        val h = Hash(idx)
         loadIndex(h).map(h -> _)
       }
       .mapConcat {

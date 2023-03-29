@@ -51,7 +51,7 @@ class IndexSpec extends AnyFreeSpec with Matchers with BeforeAndAfterAll with Sc
         (1 to 100).foreach { _ =>
           val missing = randomHash()
           if (!indexed.contains(missing)) {
-            the[NoSuchElementException] thrownBy (index.lookup(missing))
+            index.lookupOption(missing) shouldBe None
           }
         }
       }

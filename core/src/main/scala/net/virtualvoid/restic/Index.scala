@@ -30,7 +30,8 @@ trait Index[T] {
   def lookup(id: Hash): T
   def lookupAll(id: Hash): Seq[T]
 
-  def find(id: Hash): (Int, Int)
+  def lookupOption(id: Hash): Option[T]
+
   def allKeys: IndexedSeq[Hash]
   def allValues: IndexedSeq[T]
 }
@@ -237,26 +238,28 @@ object Index {
         serializer.read(id, reader)
       }
 
-      override def lookupAll(id: Hash): Seq[T] = try {
-        val (idx, _) = find(id)
-        val targetKey = prefixOf(id)
-        @tailrec def it(at: Int, step: Int): Int =
-          if (at >= 0 && at < numEntries && keyAt(at) == targetKey) it(at + step, step)
-          else at - step
+      override def lookupAll(id: Hash): Seq[T] =
+        find(id) match {
+          case Some((idx, _)) =>
+            val targetKey = prefixOf(id)
+            @tailrec def it(at: Int, step: Int): Int =
+              if (at >= 0 && at < numEntries && keyAt(at) == targetKey) it(at + step, step)
+              else at - step
 
-        val first = it(idx, -1)
-        val last = it(idx, +1)
-        (first to last).map(entryAt(id, _))
-      } catch {
-        case _: NoSuchElementException => Nil
-      }
-
+            val first = it(idx, -1)
+            val last = it(idx, +1)
+            (first to last).map(entryAt(id, _))
+          case None => Nil
+        }
       override def lookup(id: Hash): T = {
-        val (idx, _) = find(id)
+        val Some((idx, _)) = find(id)
         entryAt(id, idx)
       }
 
-      def find(id: Hash): (Int, Int) = {
+      override def lookupOption(id: Hash): Option[T] =
+        find(id).map(t => entryAt(id, t._1))
+
+      def find(id: Hash): Option[(Int, Int)] = {
         val targetKey = prefixOf(id)
 
         def interpolate(leftIndex: Int, leftKey: Long, rightIndex: Int, rightKey: Long): Int =
@@ -264,30 +267,53 @@ object Index {
 
         // https://www.sciencedirect.com/science/article/pii/S221509862100046X
         // hashes should be uniformly distributed, so interpolation search is fastest
-        @tailrec def rec(leftIndex: Int, leftKey: Long, rightIndex: Int, rightKey: Long, step: Int, trace: Boolean = false): (Int, Int) = {
+        @tailrec def rec(leftIndex: Int, leftKey: Long, rightIndex: Int, rightKey: Long, step: Int, trace: Boolean = false): Option[(Int, Int)] = {
           val guess =
             if (step < 10) interpolate(leftIndex, leftKey, rightIndex, rightKey) // interpolation
             else (leftIndex + rightIndex) / 2 // binary search
-          val guessKey = keyAt(guess)
-          if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
-          if (guessKey == targetKey) (guess, step)
-          else if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex) throw new NoSuchElementException(id.toString)
-          else if (step > 50) // 10 + log2(numEntries)
-            // debug if we never got a result
-            if (!trace) rec(0, keyAt(0), numEntries - 1, keyAt(numEntries - 1), 1, trace = true)
-            else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
-          else {
-            val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
-            val newLeftKey = if (targetKey < guessKey) leftKey else keyAt(guess + 1)
-            val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
-            val newRightKey = if (targetKey < guessKey) keyAt(guess - 1) else rightKey
 
-            rec(newLeft, newLeftKey, newRight, newRightKey, step + 1, trace)
+          if (leftIndex > rightIndex || guess < leftIndex || guess > rightIndex || targetKey < leftKey || targetKey > rightKey) None
+          else {
+            val guessKey = keyAt(guess)
+            if (trace) Index.trace(f"[$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d ($guessKey%015x)")
+            if (guessKey == targetKey) Some((guess, step))
+            else if (step > 50) // 10 + log2(numEntries)
+              // debug if we never got a result
+              if (!trace) rec(0, keyAt(0), numEntries - 1, keyAt(numEntries - 1), 1, trace = true)
+              else throw new IllegalStateException(f"didn't converge after $step steps: [$targetKey%015x] step: $step%2d left: $leftIndex%8d right: $rightIndex%8d range: ${rightIndex - leftIndex}%8d guess: $guess%8d (${keyAt(guess)}%015x)")
+            else {
+              val newLeft = if (targetKey < guessKey) leftIndex else guess + 1
+              val newLeftKey = if (targetKey < guessKey) leftKey else keyAt(guess + 1)
+              val newRight = if (targetKey < guessKey) guess - 1 else rightIndex
+              val newRightKey = if (targetKey < guessKey) keyAt(guess - 1) else rightKey
+
+              rec(newLeft, newLeftKey, newRight, newRightKey, step + 1, trace)
+            }
           }
         }
 
-        rec(0, keyAt(0), numEntries - 1, keyAt(numEntries - 1), 1)
+        val minKey = keyAt(0)
+        val maxKey = keyAt(numEntries - 1)
+        /*println(s"minKey: $minKey maxKey: $maxKey targetKey: $targetKey")
+        if (targetKey < minKey || targetKey > maxKey) None
+        else*/
+        try rec(0, minKey, numEntries - 1, maxKey, 1)
+        catch {
+          case _: Throwable => rec(0, minKey, numEntries - 1, maxKey, 1, trace = true)
+        }
       }
     }
   }
+
+  def composite[T](parts: Seq[Index[T]]): Index[T] =
+    new Index[T] {
+      override def lookup(id: Hash): T = lookupOption(id).get
+      override def lookupOption(id: Hash): Option[T] =
+        parts.iterator.map(_.lookupOption(id)).collectFirst {
+          case Some(value) => value
+        }
+      override def lookupAll(id: Hash): Seq[T] = parts.flatMap(_.lookupAll(id))
+      override def allKeys: IndexedSeq[Hash] = parts.flatMap(_.allKeys).toVector
+      override def allValues: IndexedSeq[T] = parts.flatMap(_.allValues).toVector
+    }
 }

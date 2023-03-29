@@ -65,17 +65,23 @@ object BackReferences {
           .map(s => s._2.tree -> SnapshotReference(s._1))
           .runWith(Sink.seq[(Hash, SnapshotReference)])
 
-      lazy val backrefIndex: Future[Index[BackReference]] =
-        reader.blob2packIndex.flatMap { i =>
-          def allBackReferences: Source[(Hash, BackReference), Any] =
-            Source(i.allValues)
-              .filter(_.isTree)
-              .mapAsync(1024)(treeBackReferences)
-              .async
-              .mapConcat(identity)
-              .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
-          reader.cachedIndex("backrefs", reader.indexStateString, allBackReferences)
-        }
+      lazy val backrefIndex: Future[Index[BackReference]] = {
+        def allBackReferences(indices: Seq[String]): Source[(Hash, BackReference), Any] =
+          Source(indices)
+            .mapAsync(1)(idx => reader.loadIndex(Hash(idx)))
+            .mapConcat { i =>
+              i.packs.flatMap { p =>
+                p.blobs.filter(_.isTree).map { pb =>
+                  PackEntry(p.id, pb.id, BlobType.Tree, pb.offset, pb.length, pb.uncompressed_length)
+                }
+              }
+            }
+            .mapAsync(1024)(treeBackReferences)
+            .async
+            .mapConcat(identity)
+            .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
+        reader.cachedIndexFromBaseElements("backrefs", reader.allIndexFileNames, allBackReferences)
+      }
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =
         backrefIndex.map(_.lookupAll(hash))
