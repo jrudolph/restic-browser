@@ -186,12 +186,21 @@ class ResticRoutes(reader: ResticRepository) {
       }
 
   def chainSetForChains(chains: Seq[Chain]): ChainSet = {
-    def hostPathSnapshot(chain: Chain): HostPathSnapshot = chain.chain.reverse match {
+    def hostPathSnapshot(chain: Chain): Option[HostPathSnapshot] = chain.chain.reverse match {
       case SnapshotNode(id, snap) :: remaining =>
         val path = remaining.map(_.asInstanceOf[TreeChainNode].tree.name)
-        HostPathSnapshot(HostPath(snap.hostname, path), snap)
+        Some(HostPathSnapshot(HostPath(snap.hostname, path), snap))
+      case _ => None // orphan, let's ignore those for now
     }
-    ChainSet(chains.map(hostPathSnapshot).groupBy(_.hostPath).mapValues(x => SnapshotSet(x.map(_.snapshot))).toSeq.sortBy(_._2.lastSeen).reverse)
+    ChainSet(
+      chains
+        .flatMap(hostPathSnapshot)
+        .groupBy(_.hostPath)
+        .mapValues(x => SnapshotSet(x.map(_.snapshot)))
+        .toSeq
+        .sortBy(_._2.lastSeen)
+        .reverse
+    )
   }
 
   def chainsForFile(leaf: TreeLeaf): Future[Seq[Chain]] =
