@@ -12,10 +12,12 @@ import scala.concurrent.Future
 
 trait Writer {
   def uint32le(value: Int): Unit
+  def uint64le(value: Long): Unit
   def hash(hash: Hash): Unit
 }
 trait Reader {
   def uint32le(): Int
+  def uint64le(): Long
   def hash(): Hash
 }
 
@@ -55,6 +57,16 @@ object Index {
           os.write(value >> 24)
         }
 
+        override def uint64le(value: Long): Unit = {
+          os.write((value & 0xff).toInt)
+          os.write(((value >> 8) & 0xff).toInt)
+          os.write(((value >> 16) & 0xff).toInt)
+          os.write(((value >> 24) & 0xff).toInt)
+          os.write(((value >> 32) & 0xff).toInt)
+          os.write(((value >> 40) & 0xff).toInt)
+          os.write(((value >> 48) & 0xff).toInt)
+          os.write(((value >> 56) & 0xff).toInt)
+        }
         def hash(hash: Hash): Unit = {
           require(hash.bytes.length == 32)
           os.write(hash.bytes)
@@ -229,6 +241,17 @@ object Index {
               ((buffer.get() & 0xff) << 8) |
               ((buffer.get() & 0xff) << 16) |
               ((buffer.get() & 0xff) << 24)
+
+          override def uint64le(): Long =
+            (buffer.get() & 0xff).toLong |
+              ((buffer.get() & 0xff).toLong << 8) |
+              ((buffer.get() & 0xff).toLong << 16) |
+              ((buffer.get() & 0xff).toLong << 24) |
+              ((buffer.get() & 0xff).toLong << 32) |
+              ((buffer.get() & 0xff).toLong << 40) |
+              ((buffer.get() & 0xff).toLong << 48) |
+              ((buffer.get() & 0xff).toLong << 56)
+
           override def hash(): Hash = {
             val dst = new Array[Byte](32)
             buffer.get(dst)

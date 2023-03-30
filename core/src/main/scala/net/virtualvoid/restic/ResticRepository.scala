@@ -237,18 +237,17 @@ class ResticRepository(
 
   def allPackIds: Future[Seq[Hash]] = pack2indexIndex.map(_.allKeys)
 
-  lazy val packInfos: Future[Seq[PackInfo]] = {
-    def createInfos(): Future[Seq[PackInfo]] =
-      Source(ResticRepository.allFiles(new File(repoDir, "index")))
-        .mapAsync(1) { f =>
-          val h = Hash(f.getName)
-          loadIndex(h).map(_.allInfos)
+  lazy val packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
+  private lazy val packInfoIndex: Future[Index[PackInfo]] = {
+    def packInfos(indices: Seq[String]): Source[(Hash, PackInfo), Any] =
+      Source(indices)
+        .mapAsync(1) { idx =>
+          val h = Hash(idx)
+          loadIndex(h).map(_.allInfos.map(i => i.id -> i))
         }
         .mapConcat(identity)
-        .runWith(Sink.seq)
-        .map(_.sortBy(_.id))
-    import spray.json.DefaultJsonProtocol._
-    cachedJson("packinfos", indexStateString, createInfos)
+
+    cachedIndexFromBaseElements("packinfos", allIndexFileNames, packInfos)
   }
 
   lazy val backreferences = BackReferences(this)

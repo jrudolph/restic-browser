@@ -211,6 +211,25 @@ case class PackInfo(
 object PackInfo {
   import spray.json.DefaultJsonProtocol._
   implicit val infoFormat: JsonFormat[PackInfo] = jsonFormat5(PackInfo.apply _)
+
+  implicit object PackInfoSerializer extends Serializer[PackInfo] {
+    override def entrySize: Int = 24
+    override def write(id: Hash, t: PackInfo, writer: Writer): Unit = {
+      writer.uint64le(t.size)
+      writer.uint64le(t.uncompressedSize)
+      writer.uint32le(t.trees)
+      writer.uint32le(t.blobs)
+    }
+    override def read(id: Hash, reader: Reader): PackInfo = {
+      PackInfo(
+        id = id,
+        size = reader.uint64le(),
+        uncompressedSize = reader.uint64le(),
+        trees = reader.uint32le(),
+        blobs = reader.uint32le()
+      )
+    }
+  }
 }
 
 case class Snapshot(
