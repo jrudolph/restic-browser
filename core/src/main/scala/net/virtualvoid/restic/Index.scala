@@ -4,9 +4,10 @@ import org.apache.pekko.stream.Materializer
 import org.apache.pekko.stream.scaladsl.Source
 
 import java.io.{ BufferedOutputStream, File, FileOutputStream, OutputStream }
-import java.nio.ByteOrder
+import java.nio.{ ByteOrder, LongBuffer }
 import java.nio.channels.FileChannel
 import java.nio.channels.FileChannel.MapMode
+import java.nio.file.StandardOpenOption
 import scala.annotation.tailrec
 import scala.concurrent.Future
 
@@ -39,8 +40,10 @@ trait Index[T] {
 }
 
 object Index {
+  val HeaderSize = 0
   // for interpolation we need to fit differences into 64 bits, so work on 63 bit prefixes of hashes in general
   val HashBits = 63
+  val HashShift = 64 - HashBits
   def prefixOf(hash: Hash): Long = hash.longPrefix >>> (64 - HashBits)
 
   def trace(msg: String): Unit = Console.err.println(msg)
@@ -102,7 +105,7 @@ object Index {
     }
 
     def storeIndex(tmpDataFile: File): Index[T] = {
-      val HeaderSize = 0
+
       val EntrySize = 32 /* hash size */ + serializer.entrySize
       // entries must be 8 byte aligned (because LongBuffer only allows aligned access easily)
       require((serializer.entrySize & 0x07) == 0)
@@ -199,8 +202,9 @@ object Index {
 
   def load[T: Serializer](indexFile: File): Index[T] = {
     val serializer = implicitly[Serializer[T]]
-    val HeaderSize = 0
     val EntrySize = 32 /* hash size */ + serializer.entrySize
+    // entries must be 8 byte aligned (because LongBuffer only allows aligned access easily)
+    require((serializer.entrySize & 0x07) == 0)
 
     val file = FileChannel.open(indexFile.toPath)
     val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
@@ -208,7 +212,6 @@ object Index {
     trace(s"[${indexFile.getName}] Found $numEntries")
 
     val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
-
     def keyAt(idx: Int): Long = longBEBuffer.get((idx * EntrySize) >> 3) >>> (64 - HashBits)
 
     new Index[T] {
@@ -339,4 +342,79 @@ object Index {
       override def allKeys: IndexedSeq[Hash] = parts.flatMap(_.allKeys).toVector
       override def allValues: IndexedSeq[T] = parts.flatMap(_.allValues).toVector
     }
+
+  def merge[T: Serializer](idx1: File, idx2: File, targetFile: File): Unit = {
+    // - determine final size and allocate target
+    // - merge sort indices
+    val serializer = implicitly[Serializer[T]]
+    val EntrySize = 32 /* hash size */ + serializer.entrySize
+    require((EntrySize & 0x07) == 0)
+    val EntryLongWords = serializer.entrySize >> 3
+    val RemainingWords = EntryLongWords + 3 // (HashWords - 1 which was read before)
+
+    val idx1File = FileChannel.open(idx1.toPath)
+    val idx1Buffer = idx1File.map(MapMode.READ_ONLY, 0, idx1File.size()).order(ByteOrder.LITTLE_ENDIAN)
+
+    val idx2File = FileChannel.open(idx2.toPath)
+    val idx2Buffer = idx2File.map(MapMode.READ_ONLY, 0, idx2File.size()).order(ByteOrder.LITTLE_ENDIAN)
+
+    val idx1LongBuffer = idx1Buffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
+    val idx2LongBuffer = idx2Buffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
+    def keyOf(l: Long): Long = l >>> HashShift
+
+    val tmpIndexFile = File.createTempFile(s".${targetFile.getName}-indices", ".tmp", targetFile.getParentFile)
+    val targetChannel = FileChannel.open(tmpIndexFile.toPath, StandardOpenOption.WRITE, StandardOpenOption.READ)
+    val targetSize = idx1.length() + idx2.length()
+    targetChannel.truncate(targetSize)
+    val targetMappedBuffer = targetChannel.map(MapMode.READ_WRITE, 0, targetSize)
+    val targetBuffer = targetMappedBuffer.order(ByteOrder.BIG_ENDIAN).asLongBuffer()
+
+    def transfer(from: LongBuffer, first: Long): Unit = {
+      targetBuffer.put(first)
+      var i = 0
+      while (i < RemainingWords) {
+        targetBuffer.put(from.get())
+        i += 1
+      }
+    }
+
+    if (idx1LongBuffer.hasRemaining && idx2LongBuffer.hasRemaining) {
+      var idx1KeyLong = idx1LongBuffer.get()
+      var idx1Key = keyOf(idx1KeyLong)
+      var idx2KeyLong = idx2LongBuffer.get()
+      var idx2Key = keyOf(idx2KeyLong)
+      do {
+        if (idx1Key <= idx2Key) { // copy from idx1
+          transfer(idx1LongBuffer, idx1KeyLong)
+          if (idx1LongBuffer.hasRemaining) {
+            idx1KeyLong = idx1LongBuffer.get()
+            idx1Key = keyOf(idx1KeyLong)
+          }
+        } else {
+          transfer(idx2LongBuffer, idx2KeyLong)
+          if (idx2LongBuffer.hasRemaining) {
+            idx2KeyLong = idx2LongBuffer.get()
+            idx2Key = keyOf(idx2KeyLong)
+          }
+        }
+      } while (idx1LongBuffer.hasRemaining && idx2LongBuffer.hasRemaining)
+    }
+    if (idx1LongBuffer.hasRemaining) {
+      require(!idx2LongBuffer.hasRemaining)
+      idx1LongBuffer.position(idx1LongBuffer.position() - 1)
+      targetBuffer.put(idx1LongBuffer)
+    } else if (idx2LongBuffer.hasRemaining) {
+      require(!idx1LongBuffer.hasRemaining)
+      idx2LongBuffer.position(idx2LongBuffer.position() - 1)
+      targetBuffer.put(idx2LongBuffer)
+    }
+
+    targetMappedBuffer.force()
+
+    idx1File.close()
+    idx2File.close()
+    targetChannel.close()
+
+    tmpIndexFile.renameTo(targetFile)
+  }
 }

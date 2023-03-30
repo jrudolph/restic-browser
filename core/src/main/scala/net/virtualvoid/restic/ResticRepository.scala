@@ -141,9 +141,12 @@ class ResticRepository(
     def inFileFor(cacheFile: File): File = new File(cacheFile.getAbsolutePath + ".in")
     val cacheFiles = localCacheDir.listFiles().filter(f => f.getName.startsWith(s"$indexName.idx") && !f.getName.contains(".in") && f.getName.last.isDigit).toSeq
     val inFiles = cacheFiles.map(inFileFor)
-    def recreateCompleteIndex(): Future[Index[T]] = {
+    def deleteCacheFiles(): Unit = {
       cacheFiles.foreach(_.delete())
       inFiles.foreach(_.delete())
+    }
+    def recreateCompleteIndex(): Future[Index[T]] = {
+      deleteCacheFiles()
       cachedIndexFromBaseElements(indexName, baseData, indexData)
     }
     def loadInData(inFile: File): Seq[String] =
@@ -158,8 +161,27 @@ class ResticRepository(
       Console.err.println(s"[$indexName] Index has ${tooMuchDataSet.size} outdated elements, rebuilding completely.")
       recreateCompleteIndex()
     } else if (allDataIndexed) {
-      Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, loading.")
-      Future.successful(Index.composite(cacheFiles.map(f => Index.load(f))))
+      if (cacheFiles.size < 5) {
+        Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, loading.")
+        Future.successful(Index.composite(cacheFiles.map(f => Index.load(f))))
+      } else {
+        Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, merging...")
+        def merge(i1: File, i2: File): File = {
+          val res = File.createTempFile(s"$indexName.idx", ".tmp", localCacheDir)
+          Index.merge(i1, i2, res)
+          if (i1.getName.endsWith(".tmp")) i1.delete()
+          if (i2.getName.endsWith(".tmp")) i2.delete()
+          res
+        }
+        val res = cacheFiles.sortBy(_.length()).reduceLeft(merge)
+        val newFile = new File(localCacheDir, s"$indexName.idx.0")
+        val newIn = inFileFor(newFile)
+        deleteCacheFiles()
+
+        Utils.writeString(newIn, baseData.mkString("\n"))
+        res.renameTo(newFile)
+        Future.successful(Index.load(newFile))
+      }
     } else {
       // create new partial index (or merge if necessary)
       val newSet = baseSet.diff(inDatas)
@@ -170,7 +192,7 @@ class ResticRepository(
 
       Index.createIndex(newFile, indexData(newSet.toSeq))
         .flatMap { res =>
-          Utils.writeString(newInFile, baseData.mkString("\n"))
+          Utils.writeString(newInFile, newSet.toSeq.mkString("\n"))
           cachedIndexFromBaseElements(indexName, baseData, indexData)
         }
     }
