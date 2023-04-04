@@ -36,7 +36,7 @@ class ResticRoutes(reader: ResticRepository) {
           concat(
             pathEndOrSingleSlash {
               onSuccess(reader.packInfos) { infos =>
-                complete(html.packs(infos))
+                complete(html.packs(infos.sortBy(_.id)))
               }
             },
             path(Segment) { h =>

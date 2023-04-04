@@ -257,9 +257,7 @@ class ResticRepository(
       indexFile <- loadIndex(map.lookup(packHash))
     } yield indexFile.packs.find(_.id == packHash).get
 
-  def allPackIds: Future[Seq[Hash]] = pack2indexIndex.map(_.allKeys)
-
-  lazy val packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
+  def packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
   private lazy val packInfoIndex: Future[Index[PackInfo]] = {
     def packInfos(indices: Seq[String]): Source[(Hash, PackInfo), Any] =
       Source(indices)
