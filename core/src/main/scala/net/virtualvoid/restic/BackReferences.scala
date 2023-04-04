@@ -15,7 +15,7 @@ case class TreeReference(treeBlobId: Hash, idx: Int) extends BackReference
 sealed trait ChainNode
 case class TreeChainNode(tree: TreeNode) extends ChainNode
 case class SnapshotNode(id: Hash, node: Snapshot) extends ChainNode
-case class Chain(id: Hash, chain: List[ChainNode])
+case class Chain(chain: List[ChainNode])
 
 trait BackReferences {
   def backReferencesFor(hash: Hash): Future[Seq[BackReference]]
@@ -124,14 +124,14 @@ object BackReferences {
 
       def findBackChainsInternal(id: Hash): Future[Seq[Chain]] =
         backReferencesFor(id).flatMap { parents =>
-          if (parents.isEmpty) Future.successful(Vector(Chain(id, Nil)))
+          if (parents.isEmpty) Future.successful(Vector(Chain(Nil)))
           else
             Source(parents)
               .mapAsync(16)(ref => lookupBackRef(ref).flatMap {
                 case n: TreeChainNode =>
                   findBackChains(ref.asInstanceOf[TreeReference].treeBlobId).map(_.map(x => x.copy(chain = n :: x.chain)))
                 case s: SnapshotNode =>
-                  Future.successful(Vector(Chain(id, s :: Nil)))
+                  Future.successful(Vector(Chain(s :: Nil)))
               })
               .mapConcat(identity)
               .runWith(Sink.seq)
