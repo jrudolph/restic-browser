@@ -210,9 +210,9 @@ class ResticRoutes(reader: ResticRepository) {
       reader.backreferences.chainsFor(leaf.content.head).map { chains =>
         chains.filter { c =>
           c.chain.head match {
-            case tc @ TreeChainNode(_: TreeBranch) => true
-            case tc @ TreeChainNode(_: TreeLink)   => true
-            case tc @ TreeChainNode(l: TreeLeaf)   => l.content == leaf.content
+            case TreeChainNode(_: TreeBranch) => true
+            case TreeChainNode(_: TreeLink)   => true
+            case TreeChainNode(l: TreeLeaf)   => l.content == leaf.content
           }
 
         }

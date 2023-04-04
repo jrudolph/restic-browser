@@ -60,10 +60,11 @@ object BackReferences {
             case _                    => Nil
           }
         }
-      def snapshotBackRefs(): Future[Seq[(Hash, SnapshotReference)]] =
+      lazy val snapshotBackRefs: Future[Map[Hash, Seq[SnapshotReference]]] =
         reader.allSnapshots()
           .map(s => s._2.tree -> SnapshotReference(s._1))
           .runWith(Sink.seq[(Hash, SnapshotReference)])
+          .map(_.groupBy(_._1).view.mapValues(_.map(_._2)).toMap)
 
       lazy val backrefIndex: Future[Index[BackReference]] = {
         def allBackReferences(indices: Seq[String]): Source[(Hash, BackReference), Any] =
@@ -79,12 +80,14 @@ object BackReferences {
             .mapAsync(1024)(treeBackReferences)
             .async
             .mapConcat(identity)
-            .concat(Source.futureSource(snapshotBackRefs().map(Source(_))))
         reader.cachedIndexFromBaseElements("backrefs", reader.allIndexFileNames, allBackReferences)
       }
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =
-        backrefIndex.map(_.lookupAll(hash))
+        for {
+          idx <- backrefIndex
+          snaps <- snapshotBackRefs
+        } yield idx.lookupAll(hash) ++ snaps.getOrElse(hash, Seq.empty)
 
       lazy val snapshots: Future[Map[Hash, Snapshot]] =
         reader.allSnapshots().runWith(Sink.seq).map(_.toMap)
@@ -120,8 +123,7 @@ object BackReferences {
       }
 
       def findBackChainsInternal(id: Hash): Future[Seq[Chain]] =
-        backrefIndex.flatMap { idx =>
-          val parents = idx.lookupAll(id)
+        backReferencesFor(id).flatMap { parents =>
           if (parents.isEmpty) Future.successful(Vector(Chain(id, Nil)))
           else
             Source(parents)
@@ -135,7 +137,6 @@ object BackReferences {
               .runWith(Sink.seq)
         }
       lazy val findBackChains = memoized(findBackChainsInternal)
-      def chainsFor(id: Hash): Future[Seq[Chain]] =
-        findBackChains(id)
+      def chainsFor(id: Hash): Future[Seq[Chain]] = findBackChains(id)
     }
 }
