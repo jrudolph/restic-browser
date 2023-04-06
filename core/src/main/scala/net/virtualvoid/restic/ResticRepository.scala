@@ -271,15 +271,17 @@ class ResticRepository(
 
   def packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
   private lazy val packInfoIndex: Future[Index[PackInfo]] = {
-    def packInfos(indices: Seq[String]): Source[(Hash, PackInfo), Any] =
-      Source(indices)
+    def packInfos(packs: Seq[String]): Source[(Hash, PackInfo), Any] = {
+      val packSet = packs.toSet
+      Source(allIndexFileNames)
         .mapAsync(1) { idx =>
           val h = Hash(idx)
-          loadIndex(h).map(_.allInfos.map(i => i.id -> i))
+          loadIndex(h).map(_.allInfos.filter(p => packSet(p.id.toString)).map(i => i.id -> i))
         }
         .mapConcat(identity)
+    }
 
-    cachedIndexFromBaseElements("packinfos", allIndexFileNames, packInfos)
+    cachedIndexFromBaseElements("packinfos", allPacks, packInfos)
   }
 
   lazy val backreferences = BackReferences(this)
