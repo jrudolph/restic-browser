@@ -29,7 +29,7 @@ trait Serializer[T] {
   def read(id: Hash, reader: Reader): T
 }
 
-trait Index[T] {
+trait Index[+T] {
   def lookup(id: Hash): T
   def lookupAll(id: Hash): Seq[T]
 
@@ -206,9 +206,11 @@ object Index {
     // entries must be 8 byte aligned (because LongBuffer only allows aligned access easily)
     require((serializer.entrySize & 0x07) == 0)
 
+    val numEntries = ((indexFile.length() - HeaderSize) / EntrySize).toInt
+    if (numEntries == 0) return EmptyIndex
+
     val file = FileChannel.open(indexFile.toPath)
     val indexBuffer = file.map(MapMode.READ_ONLY, 0, file.size()).order(ByteOrder.LITTLE_ENDIAN)
-    val numEntries = ((indexFile.length() - HeaderSize) / EntrySize).toInt
     trace(s"[${indexFile.getName}] Found $numEntries")
 
     val longBEBuffer = indexBuffer.duplicate().order(ByteOrder.BIG_ENDIAN).asLongBuffer()
@@ -329,6 +331,14 @@ object Index {
         }
       }
     }
+  }
+
+  private object EmptyIndex extends Index[Nothing] {
+    override def lookup(id: Hash): Nothing = throw new NoSuchElementException
+    override def lookupAll(id: Hash): Seq[Nothing] = Seq.empty
+    override def lookupOption(id: Hash): Option[Nothing] = None
+    override def allKeys: IndexedSeq[Hash] = IndexedSeq.empty
+    override def allValues: IndexedSeq[Nothing] = IndexedSeq.empty
   }
 
   def composite[T](parts: Seq[Index[T]]): Index[T] =
