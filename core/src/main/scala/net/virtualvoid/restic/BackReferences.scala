@@ -67,20 +67,25 @@ object BackReferences {
           .map(_.groupBy(_._1).view.mapValues(_.map(_._2)).toMap)
 
       lazy val backrefIndex: Future[Index[BackReference]] = {
-        def allBackReferences(indices: Seq[String]): Source[(Hash, BackReference), Any] =
-          Source(indices)
+        def allBackReferences(packs: Seq[String]): Source[(Hash, BackReference), Any] = {
+          val packSet = packs.toSet
+          Source(reader.allIndexFileNames)
             .mapAsync(1)(idx => reader.loadIndex(Hash(idx)))
             .mapConcat { i =>
-              i.packs.flatMap { p =>
-                p.blobs.filter(_.isTree).map { pb =>
-                  PackEntry(p.id, pb.id, BlobType.Tree, pb.offset, pb.length, pb.uncompressed_length)
+              i.packs
+                .filter(p => packSet(p.id.toString))
+                .flatMap { p =>
+                  p.blobs.filter(_.isTree).map { pb =>
+                    PackEntry(p.id, pb.id, BlobType.Tree, pb.offset, pb.length, pb.uncompressed_length)
+                  }
                 }
-              }
             }
             .mapAsync(1024)(treeBackReferences)
             .async
             .mapConcat(identity)
-        reader.cachedIndexFromBaseElements("backrefs", reader.allIndexFileNames, allBackReferences)
+        }
+
+        reader.cachedIndexFromBaseElements("backrefs", reader.allPacks, allBackReferences)
       }
 
       def backReferencesFor(hash: Hash): Future[Seq[BackReference]] =

@@ -223,16 +223,22 @@ class ResticRepository(
     Utils.sha256sum(allIndexHashes)
   }
 
+  def allPacks: Seq[String] = Await.result(pack2indexIndex, 30.seconds).allKeys.map(_.toString)
+
   private implicit val packEntrySerializer = PackBlobSerializer
   lazy val blob2packIndex: Future[Index[PackEntry]] =
-    cachedIndexFromBaseElements("blob2pack", allIndexFileNames, indexEntries)
+    cachedIndexFromBaseElements("blob2pack", allPacks, indexEntriesFromPacks)
 
-  private def indexEntries(indices: Seq[String]): Source[(Hash, PackEntry), Any] =
-    Source(indices)
+  private def indexEntriesFromPacks(packs: Seq[String]): Source[(Hash, PackEntry), Any] = {
+    val packSet = packs.toSet
+    Source(allIndexFileNames)
       .mapAsync(8)(idx => loadIndex(Hash(idx)))
       .mapConcat { packIndex =>
-        packIndex.packs.flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
+        packIndex.packs
+          .filter(p => packSet(p.id.toString))
+          .flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
+  }
 
   def packEntryFor(blob: Hash): Future[PackEntry] =
     blob2packIndex.map(_.lookup(blob))
