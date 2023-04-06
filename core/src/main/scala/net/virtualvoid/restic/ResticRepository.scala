@@ -137,7 +137,9 @@ class ResticRepository(
   def cachedIndex[T: Serializer](indexName: String, baseData: String, indexData: => Source[(Hash, T), Any]): Future[Index[T]] =
     cached(s"$indexName.idx", baseData, f => Index.createIndex(f, indexData), f => Future.successful(Index.load(f)))
 
-  def cachedIndexFromBaseElements[T: Serializer](indexName: String, baseData: Seq[String], indexData: Seq[String] => Source[(Hash, T), Any]): Future[Index[T]] = {
+  def cachedIndexFromBaseElements[T: Serializer](indexName: String, baseData: Seq[String], indexData: Seq[String] => Source[(Hash, T), Any]): Future[Index[T]] =
+    cachedIndexFromBaseElements(indexName, Future.successful(baseData), indexData)
+  def cachedIndexFromBaseElements[T: Serializer](indexName: String, baseDataFut: Future[Seq[String]], indexData: Seq[String] => Source[(Hash, T), Any]): Future[Index[T]] = {
     def inFileFor(cacheFile: File): File = new File(cacheFile.getAbsolutePath + ".in")
     val cacheFiles = localCacheDir.listFiles().filter(f => f.getName.startsWith(s"$indexName.idx") && !f.getName.contains(".in") && f.getName.last.isDigit).toSeq
     val inFiles = cacheFiles.map(inFileFor)
@@ -147,54 +149,58 @@ class ResticRepository(
     }
     def recreateCompleteIndex(): Future[Index[T]] = {
       deleteCacheFiles()
-      cachedIndexFromBaseElements(indexName, baseData, indexData)
+      cachedIndexFromBaseElements(indexName, baseDataFut, indexData)
     }
     def loadInData(inFile: File): Seq[String] =
       scala.io.Source.fromFile(inFile).getLines().toVector
 
-    val baseSet = baseData.toSet
-    val inDatas = inFiles.flatMap(loadInData).toSet
-    val allDataIndexed = inDatas.intersect(baseSet) == baseSet
-    val tooMuchDataSet = inDatas.diff(baseSet)
+    baseDataFut.flatMap { baseData =>
+      val baseSet = baseData.toSet
+      val inDatas = inFiles.flatMap(loadInData).toSet
+      val allDataIndexed = inDatas.intersect(baseSet) == baseSet
+      val tooMuchDataSet = inDatas.diff(baseSet)
 
-    if (tooMuchDataSet.nonEmpty) {
-      Console.err.println(s"[$indexName] Index has ${tooMuchDataSet.size} outdated elements, rebuilding completely.")
-      recreateCompleteIndex()
-    } else if (allDataIndexed) {
-      if (cacheFiles.size < 5) {
-        Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, loading.")
-        Future.successful(Index.composite(cacheFiles.map(f => Index.load(f))))
+      if (tooMuchDataSet.nonEmpty) {
+        Console.err.println(s"[$indexName] Index has ${tooMuchDataSet.size} outdated elements, rebuilding completely.")
+        recreateCompleteIndex()
+      } else if (allDataIndexed) {
+        if (cacheFiles.size < 5) {
+          Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, loading.")
+          Future.successful(Index.composite(cacheFiles.map(f => Index.load(f))))
+        } else {
+          Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, merging...")
+
+          def merge(i1: File, i2: File): File = {
+            val res = File.createTempFile(s"$indexName.idx", ".tmp", localCacheDir)
+            Index.merge(i1, i2, res)
+            if (i1.getName.endsWith(".tmp")) i1.delete()
+            if (i2.getName.endsWith(".tmp")) i2.delete()
+            res
+          }
+
+          val res = cacheFiles.sortBy(_.length()).reduceLeft(merge)
+          val newFile = new File(localCacheDir, s"$indexName.idx.0")
+          val newIn = inFileFor(newFile)
+          deleteCacheFiles()
+
+          Utils.writeString(newIn, baseData.mkString("\n"))
+          res.renameTo(newFile)
+          Future.successful(Index.load(newFile))
+        }
       } else {
-        Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts fully available, merging...")
-        def merge(i1: File, i2: File): File = {
-          val res = File.createTempFile(s"$indexName.idx", ".tmp", localCacheDir)
-          Index.merge(i1, i2, res)
-          if (i1.getName.endsWith(".tmp")) i1.delete()
-          if (i2.getName.endsWith(".tmp")) i2.delete()
-          res
-        }
-        val res = cacheFiles.sortBy(_.length()).reduceLeft(merge)
-        val newFile = new File(localCacheDir, s"$indexName.idx.0")
-        val newIn = inFileFor(newFile)
-        deleteCacheFiles()
+        // create new partial index (or merge if necessary)
+        val newSet = baseSet.diff(inDatas)
+        val newFile = new File(localCacheDir, s"$indexName.idx.${cacheFiles.size}")
+        val newInFile = inFileFor(newFile)
 
-        Utils.writeString(newIn, baseData.mkString("\n"))
-        res.renameTo(newFile)
-        Future.successful(Index.load(newFile))
+        Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts is missing data from ${newSet.size} base elements. Creating new index part.")
+
+        Index.createIndex(newFile, indexData(newSet.toSeq))
+          .flatMap { res =>
+            Utils.writeString(newInFile, newSet.toSeq.mkString("\n"))
+            cachedIndexFromBaseElements(indexName, baseData, indexData)
+          }
       }
-    } else {
-      // create new partial index (or merge if necessary)
-      val newSet = baseSet.diff(inDatas)
-      val newFile = new File(localCacheDir, s"$indexName.idx.${cacheFiles.size}")
-      val newInFile = inFileFor(newFile)
-
-      Console.err.println(s"[$indexName] Index from ${cacheFiles.size} parts is missing data from ${newSet.size} base elements. Creating new index part.")
-
-      Index.createIndex(newFile, indexData(newSet.toSeq))
-        .flatMap { res =>
-          Utils.writeString(newInFile, newSet.toSeq.mkString("\n"))
-          cachedIndexFromBaseElements(indexName, baseData, indexData)
-        }
     }
   }
 
@@ -223,7 +229,7 @@ class ResticRepository(
     Utils.sha256sum(allIndexHashes)
   }
 
-  def allPacks: Seq[String] = Await.result(pack2indexIndex, 30.seconds).allKeys.map(_.toString)
+  def allPacks: Future[Seq[String]] = pack2indexIndex.map(_.allKeys.map(_.toString))
 
   private implicit val packEntrySerializer = PackBlobSerializer
   lazy val blob2packIndex: Future[Index[PackEntry]] =
