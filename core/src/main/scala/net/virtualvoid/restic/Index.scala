@@ -411,11 +411,11 @@ object Index {
     }
     if (idx1LongBuffer.hasRemaining) {
       require(!idx2LongBuffer.hasRemaining)
-      idx1LongBuffer.position(idx1LongBuffer.position() - 1)
+      if (idx1LongBuffer.position() > 0) idx1LongBuffer.position(idx1LongBuffer.position() - 1)
       targetBuffer.put(idx1LongBuffer)
     } else if (idx2LongBuffer.hasRemaining) {
       require(!idx1LongBuffer.hasRemaining)
-      idx2LongBuffer.position(idx2LongBuffer.position() - 1)
+      if (idx2LongBuffer.position() > 0) idx2LongBuffer.position(idx2LongBuffer.position() - 1)
       targetBuffer.put(idx2LongBuffer)
     }
 
