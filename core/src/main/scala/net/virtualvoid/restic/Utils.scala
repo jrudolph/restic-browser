@@ -1,10 +1,15 @@
 package net.virtualvoid.restic
 
+import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.http.caching.LfuCache
+import org.apache.pekko.http.caching.scaladsl.{ CachingSettings, LfuCacheSettings }
 import org.apache.pekko.util.ByteString
 
 import java.io.{ File, FileInputStream, FileOutputStream, InputStream, OutputStream }
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.{ GZIPInputStream, GZIPOutputStream }
+import scala.concurrent.Future
 
 object Utils {
   def writeString(os: OutputStream, string: String): Unit =
@@ -34,5 +39,26 @@ object Utils {
     val sha = MessageDigest.getInstance("SHA-256")
     val bytes = sha.digest(str.getBytes("utf8"))
     bytes.map("%02x".format(_)).mkString
+  }
+
+  def memoized[T, U](f: T => Future[U])(implicit system: ActorSystem): T => Future[U] = {
+    val cache = LfuCache[T, U](CachingSettings(system).withLfuCacheSettings(LfuCacheSettings(system).withMaxCapacity(50000).withInitialCapacity(10000)))
+
+    val hits = new AtomicLong()
+    val misses = new AtomicLong()
+
+    t => {
+      def report(): Unit = {
+        val hs = hits.get()
+        val ms = misses.get()
+        println(f"Hits: $hs%10d Misses: $ms%10d hit rate: ${hs.toFloat / (hs + ms)}%5.2f")
+      }
+
+      if (cache.get(t).isDefined) {
+        if (hits.incrementAndGet() % 10000 == 0) report()
+      } else if (misses.incrementAndGet() % 10000 == 0) report()
+
+      cache(t, () => f(t))
+    }
   }
 }
