@@ -20,6 +20,8 @@ case class Chain(chain: List[ChainNode])
 trait BackReferences {
   def backReferencesFor(hash: Hash): Future[Seq[BackReference]]
   def chainsFor(id: Hash): Future[Seq[Chain]]
+
+  def initializeIndex(): Future[Any]
 }
 object BackReferences {
   private implicit object BackReferenceSerializer extends Serializer[BackReference] {
@@ -93,6 +95,8 @@ object BackReferences {
           idx <- backrefIndex
           snaps <- snapshotBackRefs
         } yield idx.lookupAll(hash) ++ snaps.getOrElse(hash, Seq.empty)
+
+      override def initializeIndex(): Future[Any] = backrefIndex
 
       lazy val snapshots: Future[Map[Hash, Snapshot]] =
         reader.allSnapshots().runWith(Sink.seq).map(_.toMap)

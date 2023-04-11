@@ -85,6 +85,15 @@ object ResticRepository {
 class ResticRepository(
     settings:  ResticSettings,
     masterKey: MasterKey)(implicit val system: ActorSystem) {
+  import system.dispatcher
+  def initializeIndices(): Future[Any] = {
+    val i1 = blob2packIndex
+    val i2 = backreferences.initializeIndex()
+    val i3 = pack2indexIndex
+    val i4 = packInfoIndex
+    Future.sequence(Seq(i1, i2, i3, i4))
+  }
+
   import ResticRepository._
 
   def repoDir: File = settings.repositoryDir
