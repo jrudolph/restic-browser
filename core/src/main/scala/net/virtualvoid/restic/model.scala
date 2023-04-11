@@ -45,14 +45,20 @@ final class Hash private (val bytes: Array[Byte]) {
 }
 object Hash {
   def unsafe(bytes: Array[Byte]): Hash = new Hash(bytes)
-  def apply(string: String): Hash = {
+  private val hexTable: Array[Byte] = {
     def hexToInt(ch: Char): Int =
       if (ch >= '0' && ch <= '9') ch - '0'
       else if (ch >= 'a' && ch <= 'f') (ch - 'a') + 10
-      else throw new IllegalArgumentException(s"not a hex char: '$ch' ${ch.toInt}")
+      else 0 //throw new IllegalArgumentException(s"not a hex char: '$ch' ${ch.toInt}")
+
+    Array.tabulate(256)(c => hexToInt(c.toChar).toByte)
+  }
+
+  def apply(string: String): Hash = {
+
     @tailrec def rec(ix: Int, buffer: Array[Byte]): Hash =
       if (ix < string.length) {
-        buffer(ix / 2) = ((hexToInt(string.charAt(ix)) << 4) | hexToInt(string.charAt(ix + 1))).toByte
+        buffer(ix / 2) = ((hexTable(string.charAt(ix)) << 4) | hexTable(string.charAt(ix + 1))).toByte
         rec(ix + 2, buffer)
       } else new Hash(buffer)
 
