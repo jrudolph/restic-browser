@@ -37,6 +37,7 @@ trait Index[+T] {
 
   def allKeys: IndexedSeq[Hash]
   def allValues: IndexedSeq[T]
+  def iterateAllValuesUnordered(): Iterator[T] = allValues.iterator
 }
 
 object Index {
@@ -342,16 +343,19 @@ object Index {
   }
 
   def composite[T](parts: Seq[Index[T]]): Index[T] =
-    new Index[T] {
-      override def lookup(id: Hash): T = lookupOption(id).get
-      override def lookupOption(id: Hash): Option[T] =
-        parts.iterator.map(_.lookupOption(id)).collectFirst {
-          case Some(value) => value
-        }
-      override def lookupAll(id: Hash): Seq[T] = parts.flatMap(_.lookupAll(id))
-      override def allKeys: IndexedSeq[Hash] = parts.flatMap(_.allKeys).toVector
-      override def allValues: IndexedSeq[T] = parts.flatMap(_.allValues).toVector
-    }
+    if (parts.size == 1) parts.head
+    else
+      new Index[T] {
+        override def lookup(id: Hash): T = lookupOption(id).get
+        override def lookupOption(id: Hash): Option[T] =
+          parts.iterator.map(_.lookupOption(id)).collectFirst {
+            case Some(value) => value
+          }
+        override def lookupAll(id: Hash): Seq[T] = parts.flatMap(_.lookupAll(id))
+        override def allKeys: IndexedSeq[Hash] = parts.flatMap(_.allKeys).toVector
+        override def allValues: IndexedSeq[T] = parts.flatMap(_.allValues).toVector
+        override def iterateAllValuesUnordered(): Iterator[T] = parts.iterator.flatMap(_.iterateAllValuesUnordered())
+      }
 
   def merge[T: Serializer](idx1: File, idx2: File, targetFile: File): Unit = {
     // - determine final size and allocate target
