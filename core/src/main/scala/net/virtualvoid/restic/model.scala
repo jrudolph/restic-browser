@@ -135,6 +135,11 @@ case class TreeLink(
   override def isLeaf: Boolean = false
   override def isLink: Boolean = true
 }
+case class Other(name: CachedName.T, `type`: String) extends TreeNode {
+  override def isBranch: Boolean = false
+  override def isLeaf: Boolean = false
+  override def isLink: Boolean = false
+}
 case class TreeBlob(
     nodes: Vector[TreeNode]
 )
@@ -143,11 +148,13 @@ object TreeBlob {
   implicit val leafFormat = jsonFormat3(TreeLeaf.apply _)
   implicit val branchFormat = jsonFormat2(TreeBranch.apply _)
   implicit val linkFormat = jsonFormat2(TreeLink.apply _)
+  implicit val otherFormat = jsonFormat2(Other.apply _)
   implicit val nodeFormat = new JsonFormat[TreeNode] {
     override def read(json: JsValue): TreeNode = json.asJsObject.fields("type") match {
       case JsString("dir")     => json.convertTo[TreeBranch]
       case JsString("file")    => json.convertTo[TreeLeaf]
       case JsString("symlink") => json.convertTo[TreeLink]
+      case JsString(_)         => json.convertTo[Other]
     }
 
     override def write(obj: TreeNode): JsValue = ???
