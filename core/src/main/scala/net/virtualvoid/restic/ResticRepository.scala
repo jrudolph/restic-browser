@@ -246,8 +246,9 @@ class ResticRepository(
 
   private def indexEntriesFromPacks(packs: Seq[String]): Source[(Hash, PackEntry), Any] = {
     val packSet = packs.toSet
+
     Source(allIndexFileNames)
-      .mapAsync(8)(idx => loadIndex(Hash(idx)))
+      .mapAsyncUnordered(4)(idx => loadIndex(Hash(idx)))
       .mapConcat { packIndex =>
         packIndex.packs
           .filter(p => packSet(p.id.toString))
@@ -264,7 +265,7 @@ class ResticRepository(
 
   def allPack2IndexEntries(indices: Seq[String]): Source[(Hash, Hash), Any] =
     Source(indices)
-      .mapAsync(1) { idx =>
+      .mapAsyncUnordered(16) { idx =>
         val h = Hash(idx)
         loadIndex(h).map(h -> _)
       }
@@ -283,7 +284,7 @@ class ResticRepository(
     def packInfos(packs: Seq[String]): Source[(Hash, PackInfo), Any] = {
       val packSet = packs.toSet
       Source(allIndexFileNames)
-        .mapAsync(1) { idx =>
+        .mapAsyncUnordered(4) { idx =>
           val h = Hash(idx)
           loadIndex(h).map(_.allInfos.filter(p => packSet(p.id.toString)).map(i => i.id -> i))
         }
