@@ -7,6 +7,7 @@ import java.nio.ByteBuffer
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Base64
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.spec.SecretKeySpec
 import scala.annotation.tailrec
 import scala.util.Try
@@ -54,8 +55,10 @@ object Hash {
     Array.tabulate(256)(c => hexToInt(c.toChar).toByte)
   }
 
-  def apply(string: String): Hash = {
+  private lazy val hashCache = new ConcurrentHashMap[String, Hash]()
+  def apply(string: String): Hash = hashCache.computeIfAbsent(string, parseHash(_))
 
+  def parseHash(string: String): Hash = {
     @tailrec def rec(ix: Int, buffer: Array[Byte]): Hash =
       if (ix < string.length) {
         buffer(ix / 2) = ((hexTable(string.charAt(ix)) << 4) | hexTable(string.charAt(ix + 1))).toByte
