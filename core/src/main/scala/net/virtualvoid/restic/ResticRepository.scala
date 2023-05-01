@@ -244,18 +244,9 @@ class ResticRepository(
   lazy val blob2packIndex: Future[Index[PackEntry]] =
     cachedIndexFromBaseElements("blob2pack", allPacks, indexEntriesFromPacks)
 
-  private def indexEntriesFromPacks(packs: Seq[String]): Source[(Hash, PackEntry), Any] = {
-    val packSet = packs.map(Hash(_)).toSet
-    val indexSet = indexSetForPacks(packSet)
-
-    Source.futureSource(indexSet.map(Source(_)))
-      .mapAsyncUnordered(4)(idx => loadIndex(idx))
-      .mapConcat { packIndex =>
-        packIndex.packs
-          .filter(p => packSet(p.id))
-          .flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
-      }
-  }
+  private def indexEntriesFromPacks(packs: Seq[String]): Source[(Hash, PackEntry), Any] =
+    packIndexForPacks(packs.map(Hash(_)))
+      .mapConcat(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
 
   def packEntryFor(blob: Hash): Future[PackEntry] =
     blob2packIndex.map(_.lookup(blob))
@@ -282,19 +273,20 @@ class ResticRepository(
 
   def indexSetForPacks(packs: Iterable[Hash]): Future[Set[Hash]] =
     pack2indexIndex.map(i => packs.map(i.lookup).toSet)
+  def packIndexForPacks(packs: Iterable[Hash]): Source[PackIndex, Any] = {
+    val packSet = packs.toSet
+    val indexSet = indexSetForPacks(packs)
+
+    Source.futureSource(indexSet.map(Source(_)))
+      .mapAsyncUnordered(4)(loadIndex)
+      .mapConcat(_.packs.filter(pi => packSet(pi.id)))
+  }
 
   def packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
   private lazy val packInfoIndex: Future[Index[PackInfo]] = {
-    def packInfos(packs: Seq[String]): Source[(Hash, PackInfo), Any] = {
-      val packSet = packs.map(Hash(_)).toSet
-      val indexSet = indexSetForPacks(packSet)
-
-      Source.futureSource(indexSet.map(Source(_)))
-        .mapAsyncUnordered(4) { idx =>
-          loadIndex(idx).map(_.allInfos.filter(p => packSet(p.id)).map(i => i.id -> i))
-        }
-        .mapConcat(identity)
-    }
+    def packInfos(packs: Seq[String]): Source[(Hash, PackInfo), Any] =
+      packIndexForPacks(packs.map(Hash(_)))
+        .map(i => i.id -> i.toPackInfo)
 
     cachedIndexFromBaseElements("packinfos", allPacks, packInfos)
   }
