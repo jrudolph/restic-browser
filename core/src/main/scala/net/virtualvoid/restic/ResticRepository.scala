@@ -245,13 +245,14 @@ class ResticRepository(
     cachedIndexFromBaseElements("blob2pack", allPacks, indexEntriesFromPacks)
 
   private def indexEntriesFromPacks(packs: Seq[String]): Source[(Hash, PackEntry), Any] = {
-    val packSet = packs.toSet
+    val packSet = packs.map(Hash(_)).toSet
+    val indexSet = indexSetForPacks(packSet)
 
-    Source(allIndexFileNames)
-      .mapAsyncUnordered(4)(idx => loadIndex(Hash(idx)))
+    Source.futureSource(indexSet.map(Source(_)))
+      .mapAsyncUnordered(4)(idx => loadIndex(idx))
       .mapConcat { packIndex =>
         packIndex.packs
-          .filter(p => packSet(p.id.toString))
+          .filter(p => packSet(p.id))
           .flatMap(p => p.blobs.map(b => b.id -> PackEntry(p.id, b.id, b.`type`, b.offset, b.length, b.uncompressed_length)))
       }
   }
@@ -279,14 +280,18 @@ class ResticRepository(
       indexFile <- loadIndex(map.lookup(packHash))
     } yield indexFile.packs.find(_.id == packHash).get
 
+  def indexSetForPacks(packs: Iterable[Hash]): Future[Set[Hash]] =
+    pack2indexIndex.map(i => packs.map(i.lookup).toSet)
+
   def packInfos: Future[Seq[PackInfo]] = packInfoIndex.map(_.allValues)
   private lazy val packInfoIndex: Future[Index[PackInfo]] = {
     def packInfos(packs: Seq[String]): Source[(Hash, PackInfo), Any] = {
-      val packSet = packs.toSet
-      Source(allIndexFileNames)
+      val packSet = packs.map(Hash(_)).toSet
+      val indexSet = indexSetForPacks(packSet)
+
+      Source.futureSource(indexSet.map(Source(_)))
         .mapAsyncUnordered(4) { idx =>
-          val h = Hash(idx)
-          loadIndex(h).map(_.allInfos.filter(p => packSet(p.id.toString)).map(i => i.id -> i))
+          loadIndex(idx).map(_.allInfos.filter(p => packSet(p.id)).map(i => i.id -> i))
         }
         .mapConcat(identity)
     }
