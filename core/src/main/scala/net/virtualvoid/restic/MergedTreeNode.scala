@@ -1,9 +1,10 @@
 package net.virtualvoid.restic
 
-import java.time.{ Duration, Instant, LocalDate, Period, ZonedDateTime }
+import java.time.{ Duration, Instant, ZonedDateTime }
 import scala.concurrent.Future
-import MergedTreeNode.convertToInterval
 import org.apache.pekko.stream.scaladsl.{ Sink, Source }
+
+import Utils.convertToInterval
 
 case class SnapshotSet(snapshots: Seq[Snapshot]) {
   def firstSeen: ZonedDateTime = snapshots.map(_.time).min
@@ -103,15 +104,5 @@ object MergedTreeNode {
           }
           .toVector
       }
-  }
-
-  def convertToInterval(dt: ZonedDateTime): String = {
-    val p = Period.between(dt.toLocalDate, LocalDate.now())
-    def str(short: String, what: Int): String =
-      if (what > 0) f"$what%2d$short" else ""
-    if (dt.toLocalDate == LocalDate.now()) "today"
-    else if (dt.toLocalDate == LocalDate.now().minusDays(1)) "yesterday"
-    else
-      Seq(str("y", p.getYears), str("m", p.getMonths), str("d", p.getDays)).filter(_.nonEmpty).mkString(" ") + " ago"
   }
 }

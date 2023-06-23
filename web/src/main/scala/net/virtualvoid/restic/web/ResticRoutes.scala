@@ -178,7 +178,8 @@ class ResticRoutes(reader: ResticRepository) {
     reader.allSnapshots()
       .runWith(Sink.seq)
       .map { snaps =>
-        snaps.map(_._2).groupBy(s => (s.hostname, s.paths.toSet, s.flatTags.toSet))
+        snaps
+          .map(_._2).groupBy(s => (s.hostname, s.paths.toSet, s.flatTags.toSet))
           .map {
             case ((host, paths, tags), snaps) => SnapshotInfo(host, paths, tags, snaps)
           }

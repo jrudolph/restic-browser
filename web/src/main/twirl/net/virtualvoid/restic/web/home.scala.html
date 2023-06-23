@@ -12,13 +12,15 @@
         <th>Paths</th>
         <th>Tags</th>
         <th>Number of Snapshots</th>
+        <th>Latest</th>
     </tr>
-@for(snap <- snapshotInfos.sortBy(x => (-x.snapshots.size, x.host, x.paths.headOption))) {
+@for(snap <- snapshotInfos.sortBy(x => (x.host, x.paths.headOption))) {
     <tr>
         <td><a href="/host/@{snap.host}/">@{snap.host}</a></td>
         <td>@for(p <- snap.paths) { <a href="/host/@{snap.host}@p">@p</a> }</td>
         <td>@{snap.tags.mkString(", ")}</td>
         <td>@{snap.snapshots.size}</td>
+        <td>@{Utils.convertToInterval(snap.snapshots.maxBy(_.time).time)}</td>
     </tr>
 }
 </table>

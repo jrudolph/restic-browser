@@ -7,6 +7,7 @@ import org.apache.pekko.util.ByteString
 
 import java.io.{ File, FileInputStream, FileOutputStream, InputStream, OutputStream }
 import java.security.MessageDigest
+import java.time.{ LocalDate, Period, ZonedDateTime }
 import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.{ GZIPInputStream, GZIPOutputStream }
 import scala.concurrent.Future
@@ -60,5 +61,15 @@ object Utils {
 
       cache(t, () => f(t))
     }
+  }
+
+  def convertToInterval(dt: ZonedDateTime): String = {
+    val p = Period.between(dt.toLocalDate, LocalDate.now())
+    def str(short: String, what: Int): String =
+      if (what > 0) f"$what%2d$short" else ""
+    if (dt.toLocalDate == LocalDate.now()) "today"
+    else if (dt.toLocalDate == LocalDate.now().minusDays(1)) "yesterday"
+    else
+      Seq(str("y", p.getYears), str("m", p.getMonths), str("d", p.getDays)).filter(_.nonEmpty).mkString(" ") + " ago"
   }
 }
