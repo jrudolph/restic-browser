@@ -1,9 +1,10 @@
+import sbt.util
 
 val scalaV = "2.13.10"
 
-val pekkoV = "0.0.0+26623-85c2a469-SNAPSHOT"
-val pekkoHttpV = "0.0.0+4336-6d7fa0e0-SNAPSHOT"
-val pekkoConnectorsV = "0.0.0+62-041915c9-SNAPSHOT"
+val pekkoV = "1.0.0-RC2"
+val pekkoHttpV = "0.0.0+4448-10af46dc-SNAPSHOT"
+val pekkoConnectorsV = "0.0.0+99-44451f91-SNAPSHOT"
 val sprayJsonV = "1.3.6"
 
 val scalaTestV = "3.2.15"
@@ -12,7 +13,9 @@ val aircompressorV = "0.21"
 
 inThisBuild(Def.settings(
   scalaVersion := scalaV,
-  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/"
+  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/",
+  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/staging/",
+  evictionErrorLevel := util.Level.Info,
 ))
 
 lazy val root = Project(id = "root", base = file(".")).aggregate(core, web)
