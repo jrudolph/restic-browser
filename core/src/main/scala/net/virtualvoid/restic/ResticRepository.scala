@@ -257,7 +257,7 @@ class ResticRepository(
 
   def allPack2IndexEntries(indices: Seq[String]): Source[(Hash, Hash), Any] =
     Source(indices)
-      .mapAsyncUnordered(16) { idx =>
+      .mapAsyncUnordered(4) { idx =>
         val h = Hash(idx)
         loadIndex(h).map(h -> _)
       }
