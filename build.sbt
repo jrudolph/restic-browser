@@ -14,7 +14,7 @@ val aircompressorV = "0.21"
 inThisBuild(Def.settings(
   scalaVersion := scalaV,
   resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/",
-  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/staging/",
+  resolvers += "Apache Nexus Staging" at "https://repository.apache.org/content/repositories/staging/",
   evictionErrorLevel := util.Level.Info,
 ))
 
