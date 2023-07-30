@@ -1,15 +1,15 @@
 import sbt.util
 
-val scalaV = "2.13.10"
+val scalaV = "2.13.11"
 
-val pekkoV = "1.0.0-RC2"
-val pekkoHttpV = "0.0.0+4448-10af46dc-SNAPSHOT"
-val pekkoConnectorsV = "0.0.0+99-44451f91-SNAPSHOT"
+val pekkoV = "1.0.1"
+val pekkoHttpV = "1.0.0-RC2"
+val pekkoConnectorsV = "0.0.0+136-7e2116d6-SNAPSHOT"
 val sprayJsonV = "1.3.6"
 
-val scalaTestV = "3.2.15"
+val scalaTestV = "3.2.16"
 
-val aircompressorV = "0.21"
+val aircompressorV = "0.25"
 
 inThisBuild(Def.settings(
   scalaVersion := scalaV,
