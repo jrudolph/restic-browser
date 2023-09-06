@@ -3,8 +3,8 @@ import sbt.util
 val scalaV = "2.13.11"
 
 val pekkoV = "1.0.1"
-val pekkoHttpV = "1.0.0-RC2"
-val pekkoConnectorsV = "0.0.0+136-7e2116d6-SNAPSHOT"
+val pekkoHttpV = "1.0.0"
+val pekkoConnectorsV = "1.0.0"
 val sprayJsonV = "1.3.6"
 
 val scalaTestV = "3.2.16"
@@ -13,8 +13,8 @@ val aircompressorV = "0.25"
 
 inThisBuild(Def.settings(
   scalaVersion := scalaV,
-  resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/",
-  resolvers += "Apache Nexus Staging" at "https://repository.apache.org/content/repositories/staging/",
+  //resolvers += "Apache Nexus Snapshots" at "https://repository.apache.org/content/repositories/snapshots/",
+  //resolvers += "Apache Nexus Staging" at "https://repository.apache.org/content/repositories/staging/",
   evictionErrorLevel := util.Level.Info,
 ))
 
